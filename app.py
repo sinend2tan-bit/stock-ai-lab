@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 import analysis
+import scan
 import verify
 
 st.set_page_config(page_title="Stock AI Lab", page_icon="📈", layout="wide")
@@ -100,8 +101,8 @@ def show_freshness(df, symbol):
     return fresh
 
 
-tab_overview, tab_detail, tab_journal, tab_verify, tab_notes = st.tabs(
-    ["銘柄一覧", "個別分析", "仮想売買メモ", "検証", "使い方・注意"]
+tab_overview, tab_detail, tab_journal, tab_verify, tab_scan, tab_notes = st.tabs(
+    ["銘柄一覧", "個別分析", "仮想売買メモ", "検証", "スキャン", "使い方・注意"]
 )
 
 with tab_overview:
@@ -391,6 +392,72 @@ with tab_verify:
             st.rerun()
     else:
         st.info("まだ検証記録がありません。「検証を実行」を押すか、保存したCSVを読み込んでください。記録はこの画面を開いている間だけ保持されるため、CSVで保存してください。")
+
+with tab_scan:
+    st.subheader("主要な日本株のスキャン")
+    st.write(
+        f"主要な日本株 {len(scan.UNIVERSE_JP)} 銘柄を一括で取得し、中期評価のスコア順に並べます。"
+        "短期・長期の評価は補助情報です。ランキングに入るのは、中期評価ができて、"
+        "データが古い可能性でない銘柄だけです（週末・休場による間隔は、警告を付けて含めます）。"
+        "取得に失敗した銘柄や、データが古い・不足している銘柄は、理由つきで「参考外」として分けて表示します。"
+    )
+    st.write(
+        "上位の銘柄は「条件がそろった銘柄」であって、将来の値上がりを予測するものではありません。"
+        "選定理由と警告を確認し、最終判断はご自身で行ってください。取得結果は15分キャッシュされます。"
+    )
+
+    if "scan_ranked" not in st.session_state:
+        st.session_state.scan_ranked = []
+    if "scan_excluded" not in st.session_state:
+        st.session_state.scan_excluded = []
+    if "scan_meta" not in st.session_state:
+        st.session_state.scan_meta = None
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def get_batch(symbols_key, period):
+        return scan.fetch_batch(list(symbols_key), period)
+
+    force_rescan = st.checkbox("キャッシュを使わず最新のデータで取り直す", key="scan_force")
+    if st.button("スキャンを実行", type="primary"):
+        if force_rescan:
+            st.cache_data.clear()
+        progress_bar = st.progress(0, text="データ取得と評価を行っています。")
+        ranked, excluded, meta = scan.run_scan(
+            scan.UNIVERSE_JP,
+            lambda syms: get_batch(tuple(syms), scan.SCAN_PERIOD),
+            lambda s: analysis.fetch_history(s, scan.SCAN_PERIOD),
+            progress=lambda done, total: progress_bar.progress(
+                done / total, text=f"スキャン中：{done}/{total} 銘柄"
+            ),
+        )
+        progress_bar.empty()
+        st.session_state.scan_ranked = ranked
+        st.session_state.scan_excluded = excluded
+        st.session_state.scan_meta = meta
+        st.success(
+            f"スキャンが終わりました。対象 {meta['対象銘柄数']} 銘柄のうち、"
+            f"ランキング {meta['ランキング件数']} 件、参考外 {meta['参考外件数']} 件です。"
+        )
+
+    if st.session_state.scan_meta:
+        meta = st.session_state.scan_meta
+        st.caption(f"実行日時：{meta['実行日時']} / 取得期間：{meta['取得期間']}")
+        ranked_df = pd.DataFrame(st.session_state.scan_ranked, columns=scan.SCAN_COLUMNS)
+        ranked_df = ranked_df.astype(object).where(pd.notna(ranked_df), None)
+        st.dataframe(ranked_df, width="stretch", hide_index=True)
+        if st.session_state.scan_excluded:
+            st.markdown("**参考外（ランキングには入れていません）**")
+            excluded_df = pd.DataFrame(st.session_state.scan_excluded, columns=scan.SCAN_COLUMNS)
+            excluded_df = excluded_df.astype(object).where(pd.notna(excluded_df), None)
+            st.dataframe(excluded_df, width="stretch", hide_index=True)
+        st.download_button(
+            "スキャン結果をCSVで保存",
+            data=scan.scan_to_csv(st.session_state.scan_ranked, st.session_state.scan_excluded),
+            file_name="stock_ai_scan.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("まだスキャン結果がありません。「スキャンを実行」を押してください。結果はこの画面を開いている間だけ保持されるため、必要ならCSVで保存してください。")
 
 with tab_notes:
     st.subheader("使い方")
