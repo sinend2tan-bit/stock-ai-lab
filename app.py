@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import datetime
 
 import analysis
+import verify
 
 st.set_page_config(page_title="Stock AI Lab", page_icon="📈", layout="wide")
 
@@ -99,8 +100,8 @@ def show_freshness(df, symbol):
     return fresh
 
 
-tab_overview, tab_detail, tab_journal, tab_notes = st.tabs(
-    ["銘柄一覧", "個別分析", "仮想売買メモ", "使い方・注意"]
+tab_overview, tab_detail, tab_journal, tab_verify, tab_notes = st.tabs(
+    ["銘柄一覧", "個別分析", "仮想売買メモ", "検証", "使い方・注意"]
 )
 
 with tab_overview:
@@ -244,6 +245,152 @@ with tab_journal:
         file_name="stock_paper_journal.csv",
         mime="text/csv",
     )
+
+with tab_verify:
+    st.subheader("過去データでの検証")
+    st.write(
+        "過去の評価日時点で分析したと仮定し、その後の値動きで採点します。"
+        "評価は評価日までのデータだけで再現し、未来の価格は計算に使いません。"
+        f"検証仕様の版数は {verify.SPEC_VERSION} で、条件は固定です（測定窓：短期5・中期20・長期60営業日、"
+        "小動きの幅：短期±1%・中期±2%・長期±3%、評価日は5営業日ごと、データは5年分）。"
+    )
+    st.write(
+        "方向付き騰落率は参考値で、売買コストを含まないため実際の売買損益とは異なります。"
+        "中立予測は想定損益の集計に含めません。評価日を5営業日ごとに取るため測定窓が重なり、"
+        "検証件数は独立した試行の数ではありません。価格は分割・配当の調整済みで、当時の表示そのままではありません。"
+        "的中・不的中の合計が少ない時間軸は、精度を判断できません。"
+    )
+
+    if "verify_records" not in st.session_state:
+        st.session_state.verify_records = []
+    if "verify_exclusions" not in st.session_state:
+        st.session_state.verify_exclusions = []
+    if "verify_fetch_info" not in st.session_state:
+        st.session_state.verify_fetch_info = []
+
+    if "verify_conflicts" not in st.session_state:
+        st.session_state.verify_conflicts = []
+
+    run_verify = st.button("検証を実行（対象8銘柄・5年分）", type="primary")
+    if run_verify:
+        progress_bar = st.progress(0, text="データ取得と検証計算を行っています。")
+        records, exclusions, fetch_info = verify.verify_all(
+            verify.VERIFY_SYMBOLS,
+            lambda s: analysis.fetch_history(s, verify.FETCH_PERIOD),
+            progress=lambda done, total: progress_bar.progress(
+                done / total, text=f"検証中：{done}/{total} 銘柄"
+            ),
+        )
+        progress_bar.empty()
+        merged, conflicts = verify.merge_records(st.session_state.verify_records, records)
+        st.session_state.verify_records = merged
+        st.session_state.verify_conflicts = conflicts
+        st.session_state.verify_exclusions = verify.merge_exclusions(
+            st.session_state.verify_exclusions, exclusions
+        )
+        st.session_state.verify_fetch_info = fetch_info
+        st.success(f"検証を実行しました。記録は合計 {len(merged)} 件です（重複は除いています）。")
+
+    uploaded = st.file_uploader(
+        "保存した検証記録CSVを読み込む（復元・合算）", type="csv", key="verify_csv_upload"
+    )
+    if uploaded is not None:
+        loaded = verify.records_from_csv(uploaded.getvalue())
+        if loaded:
+            before = len(st.session_state.verify_records)
+            merged, conflicts = verify.merge_records(st.session_state.verify_records, loaded)
+            st.session_state.verify_records = merged
+            st.session_state.verify_conflicts = conflicts
+            st.success(f"CSVから {len(loaded)} 件を読み込み、{len(merged) - before} 件を追加しました（重複は除いています）。")
+        else:
+            st.error("このCSVは検証記録の形式ではありませんでした。記録は変更していません。")
+
+    uploaded_ex = st.file_uploader(
+        "保存した対象外集計CSVを読み込む（復元）", type="csv", key="verify_excl_upload"
+    )
+    if uploaded_ex is not None:
+        loaded_ex = verify.exclusions_from_csv(uploaded_ex.getvalue())
+        if loaded_ex:
+            before = len(st.session_state.verify_exclusions)
+            st.session_state.verify_exclusions = verify.merge_exclusions(
+                st.session_state.verify_exclusions, loaded_ex
+            )
+            st.success(
+                f"対象外集計を {len(st.session_state.verify_exclusions) - before} 件追加しました。"
+                "対象外の件数は実行ごとの地点数のため、同じ条件のものは合算しません（二重計上防止）。"
+            )
+        else:
+            st.error("このCSVは対象外集計の形式ではありませんでした。対象外集計は変更していません。")
+
+    if st.session_state.verify_conflicts:
+        st.error(
+            "同じキー（銘柄・評価日・時間軸・仕様版数）で内容の異なる記録がありました。"
+            "競合した新しい記録は取り込んでいません。既存の記録を残しています。"
+        )
+        st.dataframe(
+            pd.DataFrame(st.session_state.verify_conflicts),
+            width="stretch", hide_index=True,
+        )
+
+    if st.session_state.verify_fetch_info:
+        st.markdown("**今回の取得結果（実際に取得できた期間と件数）**")
+        st.dataframe(
+            pd.DataFrame(st.session_state.verify_fetch_info),
+            width="stretch", hide_index=True,
+        )
+    if st.session_state.verify_exclusions:
+        st.markdown("**対象外の集計（成功や的中には数えていません）**")
+        st.dataframe(
+            pd.DataFrame(st.session_state.verify_exclusions),
+            width="stretch", hide_index=True,
+        )
+
+    v_records = st.session_state.verify_records
+    if v_records or st.session_state.verify_exclusions:
+        summary = verify.aggregate(v_records, st.session_state.verify_exclusions)
+        st.markdown("**時間軸別の集計（的中率の分母は的中＋不的中のみ）**")
+        horizon_df = pd.DataFrame(summary["時間軸別"])
+        horizon_df = horizon_df.astype(object).where(pd.notna(horizon_df), None)
+        st.dataframe(horizon_df, width="stretch", hide_index=True)
+        for row in summary["時間軸別"]:
+            if row["精度判断"].startswith("件数不足"):
+                st.warning(
+                    f"{row['時間軸']}は的中・不的中の合計が {row['判定件数']} 件のため、精度を判断できません。"
+                )
+        if summary["実際方向別内訳"]:
+            st.markdown("**実際に上昇・下落した場面での予測内訳（見逃しの把握用）**")
+            st.dataframe(
+                pd.DataFrame(summary["実際方向別内訳"]), width="stretch", hide_index=True
+            )
+        with st.expander("銘柄別の集計"):
+            st.dataframe(pd.DataFrame(summary["銘柄別"]), width="stretch", hide_index=True)
+        if v_records:
+            with st.expander(f"検証記録の明細（{len(v_records)}件）"):
+                st.dataframe(
+                    pd.DataFrame(v_records, columns=verify.RECORD_COLUMNS),
+                    width="stretch", hide_index=True,
+                )
+            st.download_button(
+                "検証記録をCSVで保存",
+                data=verify.records_to_csv(v_records),
+                file_name="stock_ai_verification.csv",
+                mime="text/csv",
+            )
+        if st.session_state.verify_exclusions:
+            st.download_button(
+                "対象外集計をCSVで保存",
+                data=verify.exclusions_to_csv(st.session_state.verify_exclusions),
+                file_name="stock_ai_verification_exclusions.csv",
+                mime="text/csv",
+            )
+        if st.button("この画面の検証記録を消去"):
+            st.session_state.verify_records = []
+            st.session_state.verify_exclusions = []
+            st.session_state.verify_fetch_info = []
+            st.session_state.verify_conflicts = []
+            st.rerun()
+    else:
+        st.info("まだ検証記録がありません。「検証を実行」を押すか、保存したCSVを読み込んでください。記録はこの画面を開いている間だけ保持されるため、CSVで保存してください。")
 
 with tab_notes:
     st.subheader("使い方")

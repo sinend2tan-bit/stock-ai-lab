@@ -56,19 +56,40 @@ def select_label(symbol, name=""):
     return f"{name}（{symbol}）" if name else symbol
 
 
+# 取得に失敗したとき、短い間隔を置いて1回だけ再試行するまでの待ち時間（秒）。
+# 無料データの一時的な取得制限（レート制限）で、銘柄ごとに失敗と表示される
+# ケースを減らすため。再試行しても取得できなければ、失敗として明示する。
+FETCH_RETRY_WAIT_SECONDS = 3.0
+
+
 def fetch_history(symbol, period="2y"):
     """株価の日足を取得する。
 
     戻り値: (DataFrame, error_message)
     成功時は (データ, None)、失敗時は (空のDataFrame, 理由の説明)。
     例外は外に出さず、画面全体が止まらないようにする。
+    通信エラーや空の結果の場合は、短い間隔を置いて1回だけ再試行する
+    （一時的な取得制限への対策。再試行は最大で合計2回まで）。
     """
-    try:
-        df = yf.download(
-            symbol, period=period, auto_adjust=True, progress=False, threads=False
-        )
-    except Exception as exc:  # 通信エラー・取得制限など
-        return pd.DataFrame(), f"データ取得でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
+    import time
+
+    df = None
+    last_error = None
+    for attempt in range(2):
+        last_error = None
+        try:
+            df = yf.download(
+                symbol, period=period, auto_adjust=True, progress=False, threads=False
+            )
+        except Exception as exc:  # 通信エラー・取得制限など
+            last_error = f"データ取得でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
+            df = None
+        if df is not None and not df.empty:
+            break
+        if attempt == 0:
+            time.sleep(FETCH_RETRY_WAIT_SECONDS)
+    if last_error is not None:
+        return pd.DataFrame(), last_error
     if df is None or df.empty:
         return pd.DataFrame(), "データが取得できませんでした。銘柄コードの誤り、または提供側でデータがない可能性があります。"
     try:

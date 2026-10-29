@@ -97,6 +97,7 @@ def test_freshness_levels():
 
 def test_fetch_empty_result_returns_error(monkeypatch):
     # 通信をモック化し、空データが返るケースを決定的に検証する（実通信なし）
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
     monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: pd.DataFrame())
     df, err = analysis.fetch_history("INVALIDXYZ123", period="1y")
     assert df.empty
@@ -104,6 +105,7 @@ def test_fetch_empty_result_returns_error(monkeypatch):
 
 
 def test_fetch_none_result_returns_error(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
     monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: None)
     df, err = analysis.fetch_history("AAPL", period="1y")
     assert df.empty
@@ -114,10 +116,49 @@ def test_fetch_exception_is_caught(monkeypatch):
     def boom(*args, **kwargs):
         raise ConnectionError("network down")
 
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
     monkeypatch.setattr(analysis.yf, "download", boom)
     df, err = analysis.fetch_history("AAPL", period="1y")
     assert df.empty
     assert err is not None and "エラー" in err
+
+
+def test_fetch_retries_once_and_succeeds(monkeypatch):
+    # 1回目は例外、2回目は成功するケースで、再試行によりデータが取れること
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    good = make_frame([100.0] * 40)
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("temporary")
+        return good
+
+    monkeypatch.setattr(analysis.yf, "download", flaky)
+    df, err = analysis.fetch_history("AAPL", period="1y")
+    assert err is None
+    assert len(df) == 40
+    assert calls["n"] == 2
+
+
+def test_fetch_retries_empty_result_once(monkeypatch):
+    # 1回目が空（取得制限など）でも、2回目で成功すればデータが取れること
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    good = make_frame([100.0] * 40)
+    calls = {"n": 0}
+
+    def empty_then_good(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return pd.DataFrame()
+        return good
+
+    monkeypatch.setattr(analysis.yf, "download", empty_then_good)
+    df, err = analysis.fetch_history("7203.T", period="1y")
+    assert err is None
+    assert len(df) == 40
+    assert calls["n"] == 2
 
 
 def test_rsi_rising_only_is_100():
