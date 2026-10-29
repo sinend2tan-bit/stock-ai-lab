@@ -25,6 +25,36 @@ MIN_BARS_LONG = 250
 
 NEEDED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
+# 初期銘柄の会社名（表示専用）。これ以外の銘柄は画面側でYahooから取得を試み、
+# 取得できなければコードのみ表示する。分析ロジックには一切使わない。
+KNOWN_NAMES = {
+    "7203.T": "トヨタ自動車",
+    "6758.T": "ソニーグループ",
+    "8306.T": "三菱UFJフィナンシャル・グループ",
+    "9984.T": "ソフトバンクグループ",
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "NVIDIA",
+    "SPY": "SPDR S&P 500 ETF",
+}
+
+
+def resolve_company_name(symbol, fetched_name=""):
+    """表示用の会社名を決める。内蔵の対応表を優先し、次に取得した名前を使う。"""
+    if symbol in KNOWN_NAMES:
+        return KNOWN_NAMES[symbol]
+    return fetched_name or ""
+
+
+def display_label(symbol, name=""):
+    """「7203.T トヨタ自動車」のような表示ラベルを作る。名前が無ければコードのみ。"""
+    return f"{symbol} {name}" if name else symbol
+
+
+def select_label(symbol, name=""):
+    """選択欄用に「トヨタ自動車（7203.T）」のような表示を作る。名前が無ければコードのみ。"""
+    return f"{name}（{symbol}）" if name else symbol
+
 
 def fetch_history(symbol, period="2y"):
     """株価の日足を取得する。

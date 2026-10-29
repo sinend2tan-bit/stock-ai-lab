@@ -19,6 +19,29 @@ st.warning(
 DEFAULT_JP = "7203.T, 6758.T, 8306.T, 9984.T"
 DEFAULT_US = "AAPL, MSFT, NVDA, SPY"
 
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_company_name(symbol):
+    """会社名を表示専用に取得する（1日キャッシュ）。失敗したら空文字を返し、
+    コードのみの表示に切り替える。分析には使わない。"""
+    try:
+        import yfinance as yf
+
+        info = yf.Ticker(symbol).info
+        if isinstance(info, dict):
+            return info.get("shortName") or info.get("longName") or ""
+    except Exception:
+        pass
+    return ""
+
+
+def company_name(symbol):
+    """会社名を返す。初期銘柄は内蔵の対応表を使い、余計な通信をしない。"""
+    name = analysis.resolve_company_name(symbol)
+    if name:
+        return name
+    return analysis.resolve_company_name(symbol, fetch_company_name(symbol))
+
 with st.sidebar:
     st.header("設定")
     market = st.selectbox("市場", ["日本株", "米国株"])
@@ -29,11 +52,19 @@ with st.sidebar:
         key=f"symbols_text_{market}",
         help="日本株は例：7203.T、米国株は例：AAPL。銘柄コードはご自身でも確認してください。",
     )
-    selected_symbol = st.text_input(
-        "詳しく分析する銘柄",
-        value=(default_symbols.split(",")[0].strip()),
-        key=f"selected_symbol_{market}",
-    ).strip().upper()
+    sidebar_symbols = list(dict.fromkeys(
+        [s.strip().upper() for s in symbols_text.split(",") if s.strip()]
+    ))
+    if sidebar_symbols:
+        selected_symbol = st.selectbox(
+            "詳しく分析する銘柄",
+            sidebar_symbols,
+            key=f"selected_symbol_{market}",
+            format_func=lambda s: analysis.select_label(s, company_name(s)),
+        )
+    else:
+        selected_symbol = ""
+        st.caption("詳しく分析する銘柄は、銘柄コードを入力すると選べます。")
     period = st.selectbox(
         "取得期間", ["2y", "1y", "5y"], index=0,
         help="長期分析には日足250本以上が必要です。原則として2y（2年分）を選んでください。",
@@ -86,7 +117,7 @@ with tab_overview:
             raw, err = get_history(sym, period)
             if err is not None or raw.empty:
                 rows.append({
-                    "銘柄": sym, "状態": "取得失敗", "終値": None,
+                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得失敗", "終値": None,
                     "データ最終日": None, "本数": 0,
                     "短期": "—", "中期": "—", "長期": "—",
                     "備考": err or "データなし",
@@ -101,7 +132,7 @@ with tab_overview:
                 elif fresh["status"] == "check":
                     note = "最終日から間隔あり"
                 rows.append({
-                    "銘柄": sym, "状態": "取得成功",
+                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得成功",
                     "終値": round(float(df["Close"].iloc[-1]), 3),
                     "データ最終日": str(fresh["last_date"]),
                     "本数": fresh["rows"],
@@ -128,6 +159,7 @@ with tab_detail:
     if not selected_symbol:
         st.info("左側に銘柄コードを入力してください。")
     else:
+        st.markdown(f"**対象銘柄：{analysis.display_label(selected_symbol, company_name(selected_symbol))}**")
         raw, err = get_history(selected_symbol, period)
         if err is not None or raw.empty:
             st.error("データを取得できませんでした。" + (err or ""))

@@ -177,3 +177,42 @@ def test_freshness_jp_monday_after_friday_is_check():
     df_jp.index = pd.bdate_range(end="2026-10-23", periods=40)
     result = analysis.freshness_check(df_jp, "7203.T", today=date(2026, 10, 26))
     assert result["status"] == "check"
+
+
+def test_company_name_known_jp():
+    assert analysis.resolve_company_name("7203.T") == "トヨタ自動車"
+
+
+def test_company_name_known_us():
+    assert analysis.resolve_company_name("AAPL") == "Apple"
+
+
+def test_company_name_map_wins_over_fetched():
+    assert (
+        analysis.resolve_company_name("7203.T", "Toyota Motor Corporation")
+        == "トヨタ自動車"
+    )
+
+
+def test_company_name_unknown_uses_fetched():
+    assert analysis.resolve_company_name("9999.T", "Example Corp") == "Example Corp"
+
+
+def test_company_name_unknown_without_name_is_empty():
+    assert analysis.resolve_company_name("9999.T") == ""
+
+
+def test_display_label_with_name():
+    assert analysis.display_label("7203.T", "トヨタ自動車") == "7203.T トヨタ自動車"
+
+
+def test_display_label_without_name():
+    assert analysis.display_label("9999.T") == "9999.T"
+
+
+def test_select_label_with_name():
+    assert analysis.select_label("7203.T", "トヨタ自動車") == "トヨタ自動車（7203.T）"
+
+
+def test_select_label_without_name():
+    assert analysis.select_label("9999.T") == "9999.T"
