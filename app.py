@@ -1,9 +1,13 @@
+import io
+import zipfile
+from datetime import datetime
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
 
 import analysis
+import forward
 import scan
 import verify
 
@@ -459,6 +463,234 @@ with tab_scan:
     else:
         st.info("まだスキャン結果がありません。「スキャンを実行」を押してください。結果はこの画面を開いている間だけ保持されるため、必要ならCSVで保存してください。")
 
+    st.divider()
+    st.subheader("フォワード登録と事後評価")
+    st.write(
+        "スキャン結果をその時点のまま登録しておき、1・5・10・20営業日後に実際の値動きと比較します。"
+        "登録した予測を後から測るための仕組みで、過去のデータを測る「検証」タブとは別です。"
+        "登録は全60銘柄（参考外を含む）が対象で、評価は順位が付いた銘柄だけを対象にします。"
+    )
+    st.caption(
+        "指数比較には日経平均とTOPIX連動ETF（1306.T）を使います。"
+        "TOPIX指数そのものは無料で取得できないため、1306.T はTOPIXの代替の参考指標です（指数そのものではありません）。"
+    )
+
+    if "fwd_records" not in st.session_state:
+        st.session_state.fwd_records = []
+    if "fwd_results" not in st.session_state:
+        st.session_state.fwd_results = []
+    if "fwd_conflicts" not in st.session_state:
+        st.session_state.fwd_conflicts = []
+    if "fwd_result_conflicts" not in st.session_state:
+        st.session_state.fwd_result_conflicts = []
+    if "fwd_records_unsaved" not in st.session_state:
+        st.session_state.fwd_records_unsaved = False
+    if "fwd_results_unsaved" not in st.session_state:
+        st.session_state.fwd_results_unsaved = False
+    if "fwd_eval_notes" not in st.session_state:
+        st.session_state.fwd_eval_notes = []
+
+    def _clear_fwd_records_unsaved():
+        st.session_state.fwd_records_unsaved = False
+
+    def _clear_fwd_results_unsaved():
+        st.session_state.fwd_results_unsaved = False
+
+    if st.session_state.fwd_records_unsaved or st.session_state.fwd_results_unsaved:
+        st.warning(
+            "未保存のフォワードデータがあります。フォワード登録CSVとフォワード評価CSVを"
+            "ダウンロードして保存してください（画面を閉じると消えます）。"
+        )
+
+    if st.session_state.scan_meta:
+        if st.button("このスキャン結果をフォワード登録する"):
+            benchmarks = {}
+            for b_symbol in (forward.NIKKEI_SYMBOL, forward.TOPIX_PROXY_SYMBOL):
+                b_df, b_err = analysis.fetch_history(b_symbol, "3mo")
+                if b_err is None and b_df is not None and not b_df.empty:
+                    benchmarks[b_symbol] = (
+                        round(float(b_df["Close"].iloc[-1]), 3),
+                        pd.Timestamp(b_df.index[-1]).date().isoformat(),
+                    )
+            new_records = forward.build_records(
+                st.session_state.scan_ranked,
+                st.session_state.scan_excluded,
+                st.session_state.scan_meta,
+                benchmarks,
+            )
+            before = len(st.session_state.fwd_records)
+            merged, conflicts = forward.merge_records(
+                st.session_state.fwd_records, new_records
+            )
+            st.session_state.fwd_records = merged
+            st.session_state.fwd_conflicts = conflicts
+            added = len(merged) - before
+            if added:
+                st.session_state.fwd_records_unsaved = True
+            st.success(
+                f"フォワード登録：{added} 件を追加しました"
+                f"（重複 {len(new_records) - added - len(conflicts)} 件、競合 {len(conflicts)} 件）。"
+            )
+
+    fwd_records = st.session_state.fwd_records
+    if fwd_records:
+        scan_count = len({r["スキャンID"] for r in fwd_records})
+        st.write(f"登録済み：{len(fwd_records)} 件（スキャン {scan_count} 回分）")
+        with st.expander("登録レコードを見る"):
+            rec_df = pd.DataFrame(fwd_records, columns=forward.RECORD_COLUMNS)
+            rec_df = rec_df.astype(object).where(pd.notna(rec_df), None)
+            st.dataframe(rec_df, width="stretch", hide_index=True)
+        st.download_button(
+            "フォワード登録CSVを保存",
+            data=forward.records_to_csv(fwd_records),
+            file_name="stock_ai_forward_records.csv",
+            mime="text/csv",
+            on_click=_clear_fwd_records_unsaved,
+        )
+    up_records = st.file_uploader(
+        "フォワード登録CSVを読み込む（復元）", type="csv", key="fwd_records_upload"
+    )
+    if up_records is not None:
+        loaded = forward.records_from_csv(up_records.getvalue())
+        if loaded:
+            before = len(st.session_state.fwd_records)
+            merged, conflicts = forward.merge_records(
+                st.session_state.fwd_records, loaded
+            )
+            st.session_state.fwd_records = merged
+            st.session_state.fwd_conflicts = conflicts
+            st.success(
+                f"登録CSVを読み込みました：{len(merged) - before} 件を追加しました"
+                f"（競合 {len(conflicts)} 件）。"
+            )
+        else:
+            st.error("登録CSVの形式が違うため、読み込めませんでした。")
+    if st.session_state.fwd_conflicts:
+        st.warning("登録の競合があります（既存の記録を残し、新しい方は取り込んでいません）。")
+        st.dataframe(
+            pd.DataFrame(st.session_state.fwd_conflicts),
+            width="stretch", hide_index=True,
+        )
+
+    if fwd_records:
+        if st.button("事後評価を実行"):
+            symbols = sorted(
+                {r["コード"] for r in fwd_records if r.get("区分") == "ランキング"}
+            )
+            batch = scan.fetch_batch(symbols, scan.SCAN_PERIOD)
+
+            def fwd_fetcher(symbol):
+                if symbol in batch:
+                    return batch[symbol]
+                return analysis.fetch_history(symbol, scan.SCAN_PERIOD)
+
+            with st.spinner("評価データを取得しています。"):
+                new_results, pending, failed = forward.evaluate_records(
+                    fwd_records, fwd_fetcher
+                )
+            before = len(st.session_state.fwd_results)
+            merged, conflicts = forward.merge_results(
+                st.session_state.fwd_results, new_results
+            )
+            st.session_state.fwd_results = merged
+            st.session_state.fwd_result_conflicts = conflicts
+            added = len(merged) - before
+            if added:
+                st.session_state.fwd_results_unsaved = True
+            unevaluable = sum(
+                1 for r in new_results if r.get("状態") == "評価不能"
+            )
+            notes = [
+                f"評価結果：{added} 件を追加しました"
+                f"（うち評価不能 {unevaluable} 件、競合 {len(conflicts)} 件）。"
+            ]
+            if pending:
+                notes.append(
+                    f"まだ評価時点に到達していないものが {len(pending)} 件あります。"
+                    "到達後に再度「事後評価を実行」を押してください。"
+                )
+            for item in failed:
+                notes.append(f"取得失敗：{item['コード']}（{item['理由']}）")
+            st.session_state.fwd_eval_notes = notes
+        for note in st.session_state.fwd_eval_notes:
+            st.info(note)
+
+    fwd_results = st.session_state.fwd_results
+    if fwd_results:
+        st.download_button(
+            "フォワード評価CSVを保存",
+            data=forward.results_to_csv(fwd_results),
+            file_name="stock_ai_forward_results.csv",
+            mime="text/csv",
+            on_click=_clear_fwd_results_unsaved,
+        )
+    up_results = st.file_uploader(
+        "フォワード評価CSVを読み込む（復元）", type="csv", key="fwd_results_upload"
+    )
+    if up_results is not None:
+        loaded = forward.results_from_csv(up_results.getvalue())
+        if loaded:
+            before = len(st.session_state.fwd_results)
+            merged, conflicts = forward.merge_results(
+                st.session_state.fwd_results, loaded
+            )
+            st.session_state.fwd_results = merged
+            st.session_state.fwd_result_conflicts = conflicts
+            st.success(
+                f"評価CSVを読み込みました：{len(merged) - before} 件を追加しました"
+                f"（競合 {len(conflicts)} 件）。"
+            )
+        else:
+            st.error("評価CSVの形式が違うため、読み込めませんでした。")
+    if st.session_state.fwd_result_conflicts:
+        st.warning("評価結果の競合があります（既存の結果を残し、新しい方は取り込んでいません）。")
+        st.dataframe(
+            pd.DataFrame(st.session_state.fwd_result_conflicts),
+            width="stretch", hide_index=True,
+        )
+
+    if fwd_records and fwd_results:
+        summary = forward.summarize(fwd_results, fwd_records)
+        if summary["時点別"]:
+            st.markdown("**時点別の成績（順位が付いた全銘柄）**")
+            point_df = pd.DataFrame(
+                [{"評価営業日数": n, **vals} for n, vals in summary["時点別"].items()]
+            )
+            point_df = point_df.astype(object).where(pd.notna(point_df), None)
+            st.dataframe(point_df, width="stretch", hide_index=True)
+        if summary["順位帯別"]:
+            st.markdown("**中期順位の上位帯別の成績**")
+            band_rows = []
+            for n, band_map in summary["順位帯別"].items():
+                for band_name in ("上位5", "上位10", "上位20", "全体"):
+                    if band_name in band_map:
+                        band_rows.append(
+                            {"評価営業日数": n, "順位帯": band_name, **band_map[band_name]}
+                        )
+            band_df = pd.DataFrame(band_rows)
+            band_df = band_df.astype(object).where(pd.notna(band_df), None)
+            st.dataframe(band_df, width="stretch", hide_index=True)
+        if summary["時間軸別"]:
+            st.markdown("**時間軸別の成績（的中率は方向の予測だけが分母）**")
+            horizon_rows = [
+                {"評価営業日数": n, "時間軸": horizon, **vals}
+                for (n, horizon), vals in sorted(
+                    summary["時間軸別"].items(), key=lambda kv: (kv[0][0], kv[0][1])
+                )
+            ]
+            horizon_df = pd.DataFrame(horizon_rows)
+            horizon_df = horizon_df.astype(object).where(pd.notna(horizon_df), None)
+            st.dataframe(horizon_df, width="stretch", hide_index=True)
+            st.caption(
+                "的中率は中立・判定保留を含めない分母で計算しています。"
+                "件数が少ないうちは精度を判断できません。蓄積してから評価してください。"
+            )
+        unevaluable_count = sum(
+            1 for r in fwd_results if r.get("状態") == "評価不能"
+        )
+        if unevaluable_count:
+            st.info(f"評価不能の記録が {unevaluable_count} 件あります（理由は評価CSVの「理由」欄に残しています）。")
+
 with tab_notes:
     st.subheader("使い方")
     st.markdown("""
@@ -485,7 +717,54 @@ with tab_notes:
 - 短期スコアは日足のテクニカル条件に基づきます。リアルタイムのデイトレード用シグナルではありません。
 - 自動発注、証券口座への接続、売買注文機能はありません。
 - 仮想売買メモは永続保存されません。CSVを定期的にダウンロードして保管してください。
+- フォワード登録・評価もCSVで保存・復元します。登録や評価の後は、未保存の警告が出ている間にCSVを保存してください。下の「全データのバックアップ」で、検証・メモ・フォワードのCSVを1つのZIPにまとめて保存できます。
 """)
+    st.subheader("全データのバックアップ")
+    st.write(
+        "検証の記録と対象外集計、仮想売買メモ、フォワード登録と評価結果、最新のスキャン結果を、"
+        "1つのZIPにまとめて保存できます（データがあるものだけが含まれます）。"
+    )
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if st.session_state.get("verify_records"):
+            zf.writestr(
+                "stock_ai_verify_records.csv",
+                verify.records_to_csv(st.session_state.verify_records),
+            )
+        if st.session_state.get("verify_exclusions"):
+            zf.writestr(
+                "stock_ai_verify_exclusions.csv",
+                verify.exclusions_to_csv(st.session_state.verify_exclusions),
+            )
+        journal_df = st.session_state.get("journal")
+        if journal_df is not None and not journal_df.empty:
+            zf.writestr(
+                "stock_ai_journal.csv",
+                journal_df.to_csv(index=False).encode("utf-8-sig"),
+            )
+        if st.session_state.get("fwd_records"):
+            zf.writestr(
+                "stock_ai_forward_records.csv",
+                forward.records_to_csv(st.session_state.fwd_records),
+            )
+        if st.session_state.get("fwd_results"):
+            zf.writestr(
+                "stock_ai_forward_results.csv",
+                forward.results_to_csv(st.session_state.fwd_results),
+            )
+        if st.session_state.get("scan_meta"):
+            zf.writestr(
+                "stock_ai_scan.csv",
+                scan.scan_to_csv(
+                    st.session_state.scan_ranked, st.session_state.scan_excluded
+                ),
+            )
+    st.download_button(
+        "全データをZIPで保存",
+        data=zip_buf.getvalue(),
+        file_name="stock_ai_lab_backup.zip",
+        mime="application/zip",
+    )
     st.markdown("データ取得ライブラリ： [yfinance documentation](https://ranaroussi.github.io/yfinance/)")
 
 st.caption("Stock AI Lab | 分析補助専用・自動発注なし")

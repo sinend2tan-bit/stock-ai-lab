@@ -23,6 +23,11 @@ MIN_BARS_SHORT = 30
 MIN_BARS_MID = 80
 MIN_BARS_LONG = 250
 
+# スコア計算仕様の版数。スコアの条件を変える場合は必ず上げること。
+# フォワード登録（forward.py）の記録に刻まれ、版数の異なる記録を
+# 混ぜて評価しないための目印。定数の追加自体は条件を変えない。
+SCORING_VERSION = 1
+
 NEEDED_COLUMNS = ["Open", "High", "Low", "Close", "Volume"]
 
 # 初期銘柄の会社名（表示専用）。これ以外の銘柄は画面側でYahooから取得を試み、
