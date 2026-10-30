@@ -489,6 +489,8 @@ with tab_scan:
         st.session_state.fwd_results_unsaved = False
     if "fwd_eval_notes" not in st.session_state:
         st.session_state.fwd_eval_notes = []
+    if "fwd_register_note" not in st.session_state:
+        st.session_state.fwd_register_note = ""
 
     def _clear_fwd_records_unsaved():
         st.session_state.fwd_records_unsaved = False
@@ -527,10 +529,14 @@ with tab_scan:
             added = len(merged) - before
             if added:
                 st.session_state.fwd_records_unsaved = True
-            st.success(
+            st.session_state.fwd_register_note = (
                 f"フォワード登録：{added} 件を追加しました"
                 f"（重複 {len(new_records) - added - len(conflicts)} 件、競合 {len(conflicts)} 件）。"
             )
+            # 未保存の警告を同じ表示で出すため、メッセージを残して再描画する
+            st.rerun()
+        if st.session_state.fwd_register_note:
+            st.success(st.session_state.fwd_register_note)
 
     fwd_records = st.session_state.fwd_records
     if fwd_records:
@@ -612,6 +618,8 @@ with tab_scan:
             for item in failed:
                 notes.append(f"取得失敗：{item['コード']}（{item['理由']}）")
             st.session_state.fwd_eval_notes = notes
+            # 未保存の警告を同じ表示で出すため再描画する（メモは残る）
+            st.rerun()
         for note in st.session_state.fwd_eval_notes:
             st.info(note)
 
