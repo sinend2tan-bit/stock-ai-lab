@@ -6,6 +6,8 @@
 - エントリーは翌営業日の始値、決済は day0 起算の day5/day10 終値。
 - 2% 照合ガード、基準日の足なし、取得失敗は「評価不能」として理由付きで残る。
 - 決済日が未到来のものは「保留」として理由付きで残る。
+- ベースラインはシグナル取引と同じコスト条件のネットが主で、判定はネット同士。
+- 予定日から20営業日経過しても足が得られない保留は「評価不能」へ振り替える。
 - 重複 dedupe、対象外（V2・中立など）の分離。
 - 未来情報の混入防止（決済日より後の行を変えても結果が変わらない）。
 - 単元不足は理論評価と混ぜずに分離する。
@@ -141,10 +143,18 @@ def test_business_day_counting():
     assert t5["決済価格_終値"] == closes[6]
     assert t10["決済日"] == dates[11]
     assert t10["決済価格_終値"] == closes[11]
-    # ベースライン（同一銘柄買い持ち）は基準日終値→決済日終値のグロス
+    # ベースライン（同一銘柄買い持ち）は基準日終値→決済日終値。
+    # グロス列はコストなし、ネット列は取引と同じコスト条件を適用した値。
     assert t5["ベースライン_同一銘柄買い持ちpct"] == pytest.approx(
         (closes[6] / closes[0] - 1) * 100)
+    sell_b = closes[6] * (100_000 / closes[0])
+    fee_b = va.fee_for_amount(100_000) + va.fee_for_amount(sell_b)
+    slip_b = (100_000 + sell_b) * va.SLIPPAGE_STANDARD
+    expected_net = (sell_b - 100_000 - fee_b - slip_b) / 100_000 * 100
+    assert t5["ベースライン_同一銘柄買い持ち_ネットpct"] == pytest.approx(expected_net)
+    assert t5["ベースライン_同一銘柄買い持ち_ネットpct"] < t5["ベースライン_同一銘柄買い持ちpct"]
     assert t5["ベースライン_TOPIX代理pct"] is not None
+    assert t5["ベースライン_TOPIX代理_ネットpct"] is not None
 
 
 # ---------------------------------------------------------------
@@ -424,3 +434,174 @@ def test_records_csv_roundtrip_input():
     result = va.evaluate(loaded, fetcher, run_id="test-run")
     t5 = [t for t in result["trades"] if t["期間"] == 5][0]
     assert t5["状態"] == va.STATUS_EVALUATED
+
+
+# ---------------------------------------------------------------
+# ベースラインのコスト条件（ネット主・グロス参考）と判定への使用
+# ---------------------------------------------------------------
+
+def test_baseline_net_costs_and_excess_columns():
+    result, dates, opens, closes = standard_setup()
+    t5 = [t for t in result["trades"] if t["期間"] == 5][0]
+    # ネットのベースラインは手数料・標準スリッページ分だけグロスより小さい
+    assert t5["ベースライン_同一銘柄買い持ち_ネットpct"] < t5["ベースライン_同一銘柄買い持ちpct"]
+    assert t5["ベースライン_TOPIX代理_ネットpct"] < t5["ベースライン_TOPIX代理pct"]
+    # 超過（ネット同士・判定用）= 取引ネット% − ベースライン・ネット%
+    assert t5["超過リターン_対同一銘柄_ネットpct"] == pytest.approx(
+        t5["ネット損益pct_主結果"] - t5["ベースライン_同一銘柄買い持ち_ネットpct"])
+    assert t5["超過リターン_対TOPIX代理_ネットpct"] == pytest.approx(
+        t5["ネット損益pct_主結果"] - t5["ベースライン_TOPIX代理_ネットpct"])
+    # 超過（グロス同士・参考）= 取引グロス% − ベースライン・グロス%
+    trade_gross_pct = t5["グロス損益"] / 100_000 * 100
+    assert t5["超過リターン_対同一銘柄_グロス参考pct"] == pytest.approx(
+        trade_gross_pct - t5["ベースライン_同一銘柄買い持ちpct"])
+    assert t5["超過リターン_対TOPIX代理_グロス参考pct"] == pytest.approx(
+        trade_gross_pct - t5["ベースライン_TOPIX代理pct"])
+    # 集計にもネット（主）とグロス参考の両方が出る
+    bl = va.summarize_horizon(result["trades"], 5)["ベースライン比較"]
+    assert bl["平均超過リターン_対同一銘柄_ネットpct"] == pytest.approx(
+        t5["超過リターン_対同一銘柄_ネットpct"])
+    assert bl["平均超過リターン_対同一銘柄_グロス参考pct"] == pytest.approx(
+        t5["超過リターン_対同一銘柄_グロス参考pct"])
+    assert bl["平均超過リターン_対TOPIX代理_ネットpct"] is not None
+    assert bl["平均超過リターン_対TOPIX代理_グロス参考pct"] is not None
+
+
+def _synthetic_evaluated_trades(excess_net=0.5, excess_gross_ref=-0.5):
+    """最低証拠条件を満たす評価済み取引の合成リスト（判定条件の確認用）。"""
+    dates = biz_dates(50)
+    trades = []
+    for i in range(100):
+        net = 2000.0 if i < 60 else -1000.0  # 期待値 +800円、ペイオフ 2.0
+        trades.append({
+            "期間": 5, "状態": va.STATUS_EVALUATED, "コード": "7203.T",
+            "スキャンID": f"scan-{i % 8}", "株価基準日": dates[i % 50],
+            "決済日": dates[i % 50],
+            "ネット損益_主結果": net, "グロス損益": net + 300.0,
+            "ネット損益pct_主結果": net / 1000.0,
+            "手数料_ケース1": 214.0, "スリッページ_標準": 100.0,
+            "ネット損益_ケース2手数料0": net + 214.0,
+            "スリッページ_ストレス": 300.0, "ネット損益_ストレス": net - 200.0,
+            "超過リターン_対同一銘柄_ネットpct": excess_net,
+            "超過リターン_対同一銘柄_グロス参考pct": excess_gross_ref,
+            "超過リターン_対TOPIX代理_ネットpct": None,
+            "超過リターン_対TOPIX代理_グロス参考pct": None,
+            "単元区分": "購入可能",
+        })
+    return trades
+
+
+def test_judgement_uses_net_baseline_excess():
+    # ネット同士の超過がプラス、グロス参考の超過がマイナス → 判定はネットで決まる
+    s = va.summarize_horizon(_synthetic_evaluated_trades(), 5)
+    assert s["最低証拠条件"]["達成"] is True
+    assert s["判定条件"]["同一銘柄買い持ちベースラインを上回る"] is True
+    assert s["判定"] == "短期シグナルに優位性の兆しがある"
+    # 逆向き（ネットがマイナス、グロス参考がプラス）では条件を満たさない
+    s2 = va.summarize_horizon(
+        _synthetic_evaluated_trades(excess_net=-0.5, excess_gross_ref=0.5), 5)
+    assert s2["判定条件"]["同一銘柄買い持ちベースラインを上回る"] is False
+    assert s2["判定"] == "優位性を確認できず"
+
+
+# ---------------------------------------------------------------
+# 長期保留の評価不能への振替（予定日から20営業日）
+# ---------------------------------------------------------------
+
+def test_stale_exit_reclassified_unevaluable():
+    # 銘柄系列は8行で止まる（day10の決済足が来ない）が、市場カレンダーは
+    # 40営業日まで進んでいる → 決済予定日（カレンダー上の dates[11]）より
+    # 後の営業日数が28あるため、day10 は評価不能に振り替わる
+    frame, dates, opens, closes = rising_frame(n=8)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(40)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    t5 = [t for t in result["trades"] if t["期間"] == 5][0]
+    t10 = [t for t in result["trades"] if t["期間"] == 10][0]
+    assert t5["状態"] == va.STATUS_EVALUATED
+    assert t10["状態"] == va.STATUS_UNEVALUABLE
+    assert t10["理由"] == va.REASON_EXIT_DATA_MISSING
+    # 評価不能は勝敗・期待値の分母に入らず、理由別件数が別に表示される
+    s10 = va.summarize_horizon(result["trades"], 10)
+    assert s10["評価済み件数"] == 0
+    assert s10["評価不能件数"] == 1
+    assert s10["保留件数"] == 0
+    assert s10["評価不能理由"]["決済日の価格データが得られない"] == 1
+
+
+def test_stale_exit_exactly_20_days_reclassified():
+    # カレンダー32営業日: 決済予定日 dates[11] より後の営業日数がちょうど20
+    frame, dates, opens, closes = rising_frame(n=8)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(32)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    t10 = [t for t in result["trades"] if t["期間"] == 10][0]
+    assert t10["状態"] == va.STATUS_UNEVALUABLE
+    assert t10["理由"] == va.REASON_EXIT_DATA_MISSING
+
+
+def test_stale_exit_19_days_stays_pending():
+    # カレンダー31営業日: 決済予定日より後の営業日数が19 → まだ保留
+    frame, dates, opens, closes = rising_frame(n=8)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(31)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    t10 = [t for t in result["trades"] if t["期間"] == 10][0]
+    assert t10["状態"] == va.STATUS_PENDING
+    assert va.REASON_EXIT_NOT_YET in t10["理由"]
+
+
+def test_stale_no_calendar_stays_pending():
+    # TOPIX代理が取得できない（市場カレンダーなし）場合は振り替えない
+    frame, dates, opens, closes = rising_frame(n=8)
+    fetcher = fake_fetcher({"7203.T": frame})  # 1306.T なし → 取得失敗
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    t5 = [t for t in result["trades"] if t["期間"] == 5][0]
+    t10 = [t for t in result["trades"] if t["期間"] == 10][0]
+    assert t5["状態"] == va.STATUS_EVALUATED
+    assert t5["ベースライン_TOPIX代理pct"] is None
+    assert t5["ベースライン_TOPIX代理_ネットpct"] is None
+    assert t5["超過リターン_対TOPIX代理_ネットpct"] is None
+    assert t10["状態"] == va.STATUS_PENDING
+
+
+def test_stale_entry_reclassified_unevaluable():
+    # 銘柄系列が基準日の1行だけで止まり、カレンダーは40営業日まで進んでいる
+    # → 期待エントリー日（dates[1]）より後の営業日数が38 → 評価不能に振替
+    frame, dates, opens, closes = rising_frame(n=1)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(40)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    for t in result["trades"]:
+        assert t["状態"] == va.STATUS_UNEVALUABLE
+        assert t["理由"] == va.REASON_ENTRY_DATA_MISSING
+
+
+def test_stale_entry_19_days_stays_pending():
+    # カレンダー21営業日: 期待エントリー日 dates[1] より後の営業日数が19 → 保留
+    frame, dates, opens, closes = rising_frame(n=1)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(21)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    result = va.evaluate([rec], fetcher, run_id="test-run")
+    for t in result["trades"]:
+        assert t["状態"] == va.STATUS_PENDING
+        assert t["理由"] == va.REASON_ENTRY_NOT_YET
+
+
+def test_snapshot_roundtrip_with_stale_exit(tmp_path):
+    # 振替で評価不能になった取引も、snapshot からの再評価で一致する
+    # （snapshot にはカレンダーの進み具合まで含めて保存される）
+    frame, dates, opens, closes = rising_frame(n=8)
+    fetcher = fake_fetcher({"7203.T": frame, va.TOPIX_PROXY_SYMBOL: topix_frame(40)})
+    rec = make_record(base_date=dates[0], close=closes[0])
+    fetched_at = datetime(2026, 11, 7, 2, 0, 0, tzinfo=timezone.utc)
+    result = va.evaluate([rec], fetcher, run_id="test-run", fetched_at=fetched_at)
+    t10 = [t for t in result["trades"] if t["期間"] == 10][0]
+    assert t10["状態"] == va.STATUS_UNEVALUABLE
+    snap_dir = str(tmp_path / "snapshot")
+    manifest = va.write_snapshot(result, snap_dir)
+    assert manifest["ファイル"][va.TOPIX_PROXY_SYMBOL]["行数"] == 40
+    assert va.verify_snapshot(snap_dir) == []
+    reproduced = va.reevaluate_from_snapshot([rec], snap_dir, run_id="test-run")
+    assert va.compare_trades(result["trades"], reproduced["trades"]) == []

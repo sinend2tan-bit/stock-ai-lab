@@ -15,15 +15,27 @@
   これにより、保存した snapshot だけからの再評価が元の評価と一致する。
 - ベースライン定義（本実装の定義として明記）:
   - 同一銘柄買い持ち = 同一の再取得系列で「株価基準日の終値で買い、
-    決済日の終値で売る」グロスリターン（コストなし）。
-  - TOPIX代理 = 1306.T の同一系列・同一日付（基準日終値→決済日終値）の
-    グロスリターン。TOPIX指数そのものではなく連動ETFによる代替である。
+    決済日の終値で売る」仮想保有。TOPIX代理 = 1306.T の同一系列・同一日付
+    （基準日終値→決済日終値）の仮想保有。TOPIX指数そのものではなく
+    連動ETFによる代替である。
+  - いずれも想定元本10万円とし、シグナル取引と同じコスト条件（ケース1
+    手数料＋標準スリッページ）を適用したネットリターンを主とし、
+    コストなしのグロスリターンは参考とする。判定はネット同士の比較。
+  - 揃えられない条件として、エントリー価格の時点（ベースラインは
+    基準日終値、取引は翌営業日始値）の差が残る。詳細は BASELINE_DEFINITION。
+- 保留と評価不能: 決済日・エントリー日の足が未到来の記録は「保留」とし、
+  次回以降の評価で再評価する。ただし市場カレンダー（TOPIX代理の系列の
+  日付一覧）上で予定日から20営業日経過しても価格データが得られない場合は
+  「評価不能」に振り替える（上場廃止等で足が永遠に来ない記録を保留のまま
+  残さないため）。カレンダーが取得できない場合は振り替えない（従来どおり
+  保留）。評価不能は勝率・期待値の分母に入れず、件数と理由を別に表示する。
 - DD-1（同時保有を考慮しない）のみを算出する。DD-2 は実装しない。
 - 本評価は調整済み価格に基づく理論評価であり、実際の約定損益とは異なる。
 """
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import io
 import json
@@ -48,6 +60,7 @@ HORIZONS = (5, 10)
 PRIMARY_HORIZON = 5
 UNIT_SHARES = 100
 PRICE_TOLERANCE = 0.02  # 基準日終値の照合ガード（2%）
+STALE_BUSINESS_DAYS = 20  # 予定日からこの営業日数経過しても足が得られなければ評価不能へ振替
 SLIPPAGE_STANDARD = 0.0005  # 片道 0.05%
 SLIPPAGE_STRESS = 0.0015  # 片道 0.15%
 TOPIX_PROXY_SYMBOL = forward.TOPIX_PROXY_SYMBOL  # "1306.T"
@@ -55,9 +68,17 @@ TOPIX_PROXY_SYMBOL = forward.TOPIX_PROXY_SYMBOL  # "1306.T"
 DISCLAIMER = "調整済み価格に基づく理論評価であり、実際の約定損益とは異なる"
 DD1_LABEL = "DD-1（同時保有を考慮しない）"
 BASELINE_DEFINITION = (
-    "同一銘柄買い持ち = 同一の再取得系列で株価基準日の終値で買い、決済日の終値で売る"
-    "グロスリターン（コストなし）。TOPIX代理 = 1306.T の同一系列・同一日付"
-    "（基準日終値→決済日終値）のグロスリターン（TOPIX指数そのものではなく連動ETFによる代替）"
+    "同一銘柄買い持ち = 同一の再取得系列で株価基準日の終値で買い、決済日の終値で売る仮想保有。"
+    "TOPIX代理 = 1306.T の同一系列・同一日付（基準日終値→決済日終値）の仮想保有"
+    "（TOPIX指数そのものではなく連動ETFによる代替）。"
+    "いずれも想定元本10万円とし、シグナル取引と同じコスト条件（料金表のケース1手数料＋"
+    "標準スリッページ）を適用したネットリターンを主とし、コストなしのグロスリターンは参考とする。"
+    "判定はネット同士の比較（取引ネット% − ベースライン・ネット%）で行う。"
+    "揃えられない条件：エントリー価格の時点はベースラインが基準日終値、シグナル取引が"
+    "翌営業日始値と異なる。同一銘柄買い持ちに取引と同じ翌営業日始値を使うと、ベースラインは"
+    "取引そのものと同一になり比較にならないため、この時点差は比較の定義上不可避である。"
+    "影響として、ベースラインは基準日終値から翌営業日始値までの夜間変動を含み、"
+    "シグナル取引は含まないため、超過リターンの符号に影響しうる。"
 )
 
 # 最低証拠条件（2.1）
@@ -88,6 +109,8 @@ REASON_NO_RECORDED_CLOSE = "記録時終値なし（価格照合不能）"
 REASON_PRICE_MISMATCH = "価格照合不一致"
 REASON_ENTRY_NOT_YET = "エントリー日（翌営業日）がまだ到来していない"
 REASON_EXIT_NOT_YET = "決済日がまだ到来していない"
+REASON_ENTRY_DATA_MISSING = "エントリー日の価格データが得られない（20営業日経過）"
+REASON_EXIT_DATA_MISSING = "決済日の価格データが得られない（決済予定日から20営業日経過）"
 
 RESULT_COLUMNS = [
     "snapshot_id", "評価実行ID", "計画バージョン", "スコア仕様バージョン",
@@ -99,8 +122,10 @@ RESULT_COLUMNS = [
     "手数料_ケース1", "スリッページ_標準", "ネット損益_主結果", "ネット損益pct_主結果",
     "手数料_ケース2", "ネット損益_ケース2手数料0",
     "スリッページ_ストレス", "ネット損益_ストレス",
-    "ベースライン_同一銘柄買い持ちpct", "超過リターン_対同一銘柄pct",
-    "ベースライン_TOPIX代理pct", "超過リターン_対TOPIX代理pct",
+    "ベースライン_同一銘柄買い持ちpct", "ベースライン_同一銘柄買い持ち_ネットpct",
+    "超過リターン_対同一銘柄_ネットpct", "超過リターン_対同一銘柄_グロス参考pct",
+    "ベースライン_TOPIX代理pct", "ベースライン_TOPIX代理_ネットpct",
+    "超過リターン_対TOPIX代理_ネットpct", "超過リターン_対TOPIX代理_グロス参考pct",
     "単元価格", "単元区分", "単元株数", "単元ネット損益_参考",
     "manifest_SHA256",
 ]
@@ -222,12 +247,51 @@ def _cost_breakdown(buy_amount, sell_amount):
     return gross, fee1, slip_std, slip_stress
 
 
+def _baseline_pcts(base_price, exit_price):
+    """ベースライン（基準日終値→決済日終値の買い持ち）の (グロス%, ネット%)。
+
+    想定元本 NOTIONAL_YEN で株数 = NOTIONAL / 基準日終値 とし、シグナル取引と
+    同じコスト条件（ケース1手数料＋標準スリッページ）を適用する。
+    価格が不正なら (None, None)。
+    """
+    if base_price is None or exit_price is None or base_price <= 0:
+        return None, None
+    shares = NOTIONAL_YEN / base_price
+    buy_amount = base_price * shares
+    sell_amount = exit_price * shares
+    gross, fee1, slip_std, _ = _cost_breakdown(buy_amount, sell_amount)
+    gross_pct = gross / NOTIONAL_YEN * 100.0
+    net_pct = (gross - fee1 - slip_std) / NOTIONAL_YEN * 100.0
+    return gross_pct, net_pct
+
+
+def _stale_after(calendar, base_date, offset):
+    """予定日から STALE_BUSINESS_DAYS 営業日以上経過したかを返す（振替判定）。
+
+    calendar は市場カレンダー（TOPIX代理系列の日付一覧、ソート済み）。
+    基準日から offset 営業日後の日付を「予定日」とし、その日付がカレンダーに
+    存在し、かつカレンダー上で予定日より後の営業日数が STALE_BUSINESS_DAYS
+    以上あれば True。カレンダーが無い、基準日がカレンダーに無い、予定日
+    自体がまだカレンダーの範囲に無い場合は False（振り替えない）。
+    """
+    if not calendar:
+        return False
+    pos = bisect.bisect_left(calendar, base_date)
+    if pos >= len(calendar) or calendar[pos] != base_date:
+        return False
+    target_idx = pos + offset
+    if target_idx >= len(calendar):
+        return False
+    return len(calendar) - 1 - target_idx >= STALE_BUSINESS_DAYS
+
+
 def _evaluate_trade(rec, horizon, rows, topix_rows, base):
     """1記録×1期間の評価結果 dict を返す。
 
     base は呼び出し側で判定済みの基礎情報:
       {"status": ..., "reason": ..., "base_idx": int|None,
-       "base_close": float|None, "entry_idx": int|None}
+       "base_close": float|None, "entry_idx": int|None,
+       "calendar": list[str]|None（市場カレンダー。振替判定用）}
     """
     symbol = rec.get("コード", "")
     trade = {
@@ -258,8 +322,15 @@ def _evaluate_trade(rec, horizon, rows, topix_rows, base):
     entry_idx = base["entry_idx"]
     exit_idx = entry_idx + horizon
     if exit_idx >= len(rows):
-        trade["状態"] = STATUS_PENDING
-        trade["理由"] = f"{REASON_EXIT_NOT_YET}（day{horizon}）"
+        # 決済日の足が未到来。市場カレンダー上で決済予定日（カレンダー上の
+        # 基準日の次営業日をエントリー日とし、そこから horizon 営業日後）から
+        # 20営業日経過しても得られない場合は、保留ではなく評価不能に振り替える。
+        if _stale_after(base.get("calendar"), trade["株価基準日"], 1 + horizon):
+            trade["状態"] = STATUS_UNEVALUABLE
+            trade["理由"] = REASON_EXIT_DATA_MISSING
+        else:
+            trade["状態"] = STATUS_PENDING
+            trade["理由"] = f"{REASON_EXIT_NOT_YET}（day{horizon}）"
         return trade
     entry_row = rows[entry_idx]
     exit_row = rows[exit_idx]
@@ -280,16 +351,26 @@ def _evaluate_trade(rec, horizon, rows, topix_rows, base):
     net_stress = gross - fee1 - slip_stress
     net_pct = net_main / NOTIONAL_YEN * 100.0
 
-    # ベースライン: 同一銘柄買い持ち（基準日終値→決済日終値、グロス）
-    baseline_self_pct = (exit_close / base_close - 1.0) * 100.0
-    # ベースライン: TOPIX代理 1306.T（同一日付、基準日終値→決済日終値、グロス）
+    gross_pct = gross / NOTIONAL_YEN * 100.0
+    # ベースライン: 同一銘柄買い持ち（基準日終値→決済日終値）。
+    # シグナル取引と同じコスト条件を適用したネットを主とし、グロスは参考。
+    baseline_self_pct, baseline_self_net_pct = _baseline_pcts(base_close, exit_close)
+    excess_self_net = net_pct - baseline_self_net_pct
+    excess_self_gross_ref = gross_pct - baseline_self_pct
+    # ベースライン: TOPIX代理 1306.T（同一日付、基準日終値→決済日終値、同条件）
     topix_pct = None
+    topix_net_pct = None
+    excess_topix_net = None
+    excess_topix_gross_ref = None
     if topix_rows:
         tmap = {r["date"]: r["Close"] for r in topix_rows}
         t_base = tmap.get(trade["株価基準日"])
         t_exit = tmap.get(exit_row["date"])
         if t_base and t_exit:
-            topix_pct = (t_exit / t_base - 1.0) * 100.0
+            topix_pct, topix_net_pct = _baseline_pcts(t_base, t_exit)
+            if topix_net_pct is not None:
+                excess_topix_net = net_pct - topix_net_pct
+                excess_topix_gross_ref = gross_pct - topix_pct
 
     # 実行可能性評価（2.6.1）: 単元ベースで買い直した参考損益
     unit_price = entry_open * UNIT_SHARES
@@ -327,9 +408,13 @@ def _evaluate_trade(rec, horizon, rows, topix_rows, base):
         "スリッページ_ストレス": slip_stress,
         "ネット損益_ストレス": net_stress,
         "ベースライン_同一銘柄買い持ちpct": baseline_self_pct,
-        "超過リターン_対同一銘柄pct": net_pct - baseline_self_pct,
+        "ベースライン_同一銘柄買い持ち_ネットpct": baseline_self_net_pct,
+        "超過リターン_対同一銘柄_ネットpct": excess_self_net,
+        "超過リターン_対同一銘柄_グロス参考pct": excess_self_gross_ref,
         "ベースライン_TOPIX代理pct": topix_pct,
-        "超過リターン_対TOPIX代理pct": (net_pct - topix_pct) if topix_pct is not None else None,
+        "ベースライン_TOPIX代理_ネットpct": topix_net_pct,
+        "超過リターン_対TOPIX代理_ネットpct": excess_topix_net,
+        "超過リターン_対TOPIX代理_グロス参考pct": excess_topix_gross_ref,
         "単元価格": unit_price,
         "単元区分": unit_status,
         "単元株数": unit_shares,
@@ -361,6 +446,9 @@ def evaluate(records, fetcher, run_id="", fetched_at=None):
         return cache[symbol]
 
     topix_rows, topix_error = get_series(TOPIX_PROXY_SYMBOL)
+    # 市場カレンダー（長期保留の振替判定用）= TOPIX代理系列の日付一覧。
+    # 取得できない場合は None とし、振替は行わない（従来どおり保留）。
+    calendar = [r["date"] for r in topix_rows] if topix_rows else None
 
     trades = []
     series_used = {}
@@ -369,7 +457,7 @@ def evaluate(records, fetcher, run_id="", fetched_at=None):
         rows, err = get_series(symbol)
         series_used[symbol] = {"rows": rows, "error": err}
         base_date = str(rec.get("株価基準日", ""))
-        base = {"run_id": run_id}
+        base = {"run_id": run_id, "calendar": calendar}
         if err is not None:
             base.update({"status": STATUS_UNEVALUABLE, "reason": err})
         else:
@@ -388,7 +476,14 @@ def evaluate(records, fetcher, run_id="", fetched_at=None):
                                  "reason": f"{REASON_PRICE_MISMATCH}"
                                            f"（再取得 {base_close} / 記録 {recorded}）"})
                 elif base_idx + 1 >= len(rows):
-                    base.update({"status": STATUS_PENDING, "reason": REASON_ENTRY_NOT_YET})
+                    # エントリー日（翌営業日）の足が未到来。カレンダー上で
+                    # 期待エントリー日（基準日の次営業日）から20営業日経過
+                    # しても得られない場合は、保留ではなく評価不能に振り替える。
+                    if _stale_after(calendar, base_date, 1):
+                        base.update({"status": STATUS_UNEVALUABLE,
+                                     "reason": REASON_ENTRY_DATA_MISSING})
+                    else:
+                        base.update({"status": STATUS_PENDING, "reason": REASON_ENTRY_NOT_YET})
                 else:
                     base.update({"status": STATUS_EVALUATED, "reason": "",
                                  "base_idx": base_idx, "base_close": base_close,
@@ -496,7 +591,8 @@ def summarize_horizon(trades, horizon):
     conditions = None
     if evidence_met:
         cond_expectancy = expectancy is not None and expectancy > 0
-        excess_self = _mean([t["超過リターン_対同一銘柄pct"] for t in evaluated])
+        # ベースラインとの比較はネット同士（取引ネット% − ベースライン・ネット%）
+        excess_self = _mean([t["超過リターン_対同一銘柄_ネットpct"] for t in evaluated])
         cond_baseline = excess_self is not None and excess_self > 0
         cond_payoff = payoff is not None and payoff >= 1.0
         conditions = {
@@ -540,12 +636,16 @@ def summarize_horizon(trades, horizon):
         },
         "ベースライン比較": {
             "定義": BASELINE_DEFINITION,
-            "平均超過リターン_対同一銘柄pct": _mean(
-                [t["超過リターン_対同一銘柄pct"] for t in evaluated]),
-            "平均超過リターン_対TOPIX代理pct": _mean(
-                [t["超過リターン_対TOPIX代理pct"] for t in evaluated]),
+            "平均超過リターン_対同一銘柄_ネットpct": _mean(
+                [t["超過リターン_対同一銘柄_ネットpct"] for t in evaluated]),
+            "平均超過リターン_対同一銘柄_グロス参考pct": _mean(
+                [t["超過リターン_対同一銘柄_グロス参考pct"] for t in evaluated]),
+            "平均超過リターン_対TOPIX代理_ネットpct": _mean(
+                [t["超過リターン_対TOPIX代理_ネットpct"] for t in evaluated]),
+            "平均超過リターン_対TOPIX代理_グロス参考pct": _mean(
+                [t["超過リターン_対TOPIX代理_グロス参考pct"] for t in evaluated]),
             "TOPIX代理比較可能件数": sum(
-                1 for t in evaluated if t["超過リターン_対TOPIX代理pct"] is not None),
+                1 for t in evaluated if t["超過リターン_対TOPIX代理_ネットpct"] is not None),
         },
         "実行可能性": {
             "購入可能件数": len(feasible),
@@ -663,6 +763,17 @@ def write_snapshot(result, snapshot_dir):
         if rng is None:
             continue
         start, end = rng
+        # 保留・評価不能の判定は「系列がどこで終わっているか」「市場カレンダーが
+        # どこまで進んでいるか」に依存する。未確定の取引がある場合は、snapshot
+        # からの再評価でも判定（特に20営業日経過による評価不能への振替）が
+        # 一致するよう、取得した系列の最終日まで含める。
+        if symbol == TOPIX_PROXY_SYMBOL:
+            has_open = any(t["状態"] != STATUS_EVALUATED for t in result["trades"])
+        else:
+            has_open = any(t["コード"] == symbol and t["状態"] != STATUS_EVALUATED
+                           for t in result["trades"])
+        if has_open and rows_all:
+            end = max(end, rows_all[-1]["date"])
         rows = [r for r in rows_all if start <= r["date"] <= end]
         if not rows:
             continue
@@ -827,6 +938,12 @@ def summary_markdown(summary, manifest, extra_lines=None):
         lines.append(f"## day{h}（{s['期間区分']}）")
         lines.append(f"- 対象 {s['対象件数']}件 / 評価済み {s['評価済み件数']}件 / "
                      f"評価不能 {s['評価不能件数']}件 / 保留 {s['保留件数']}件")
+        if s["評価不能理由"]:
+            lines.append("- 評価不能の内訳: " + "、".join(
+                f"{k} {v}件" for k, v in s["評価不能理由"].items()))
+        if s["保留理由"]:
+            lines.append("- 保留の内訳: " + "、".join(
+                f"{k} {v}件" for k, v in s["保留理由"].items()))
         lines.append(f"- 勝率（コスト控除後）: {_fmt(s['勝率_コスト控除後'] * 100 if s['勝率_コスト控除後'] is not None else None)}%"
                      f" / 勝率（コスト前）: {_fmt(s['勝率_コスト前'] * 100 if s['勝率_コスト前'] is not None else None)}%")
         lines.append(f"- 平均利益: {_fmt(s['平均利益'])}円 / 平均損失: {_fmt(s['平均損失'])}円 / "
@@ -839,9 +956,13 @@ def summary_markdown(summary, manifest, extra_lines=None):
         lines.append(f"- 参考: ネット合計（ケース2・手数料0） {_fmt(b['ネット合計_ケース2手数料0'])}円 / "
                      f"ネット合計（ストレス） {_fmt(b['ネット合計_ストレス'])}円")
         bl = s["ベースライン比較"]
-        lines.append(f"- 平均超過リターン: 対同一銘柄 {_fmt(bl['平均超過リターン_対同一銘柄pct'])}%pt / "
-                     f"対TOPIX代理 {_fmt(bl['平均超過リターン_対TOPIX代理pct'])}%pt"
+        lines.append(f"- 平均超過リターン（ネット同士・判定用）: 対同一銘柄 "
+                     f"{_fmt(bl['平均超過リターン_対同一銘柄_ネットpct'])}%pt / "
+                     f"対TOPIX代理 {_fmt(bl['平均超過リターン_対TOPIX代理_ネットpct'])}%pt"
                      f"（比較可能 {bl['TOPIX代理比較可能件数']}件）")
+        lines.append(f"- 平均超過リターン（グロス同士・参考）: 対同一銘柄 "
+                     f"{_fmt(bl['平均超過リターン_対同一銘柄_グロス参考pct'])}%pt / "
+                     f"対TOPIX代理 {_fmt(bl['平均超過リターン_対TOPIX代理_グロス参考pct'])}%pt")
         fe = s["実行可能性"]
         lines.append(f"- 実行可能性: 購入可能 {fe['購入可能件数']}件 / 単元不足 {fe['単元不足件数']}件"
                      f" / 購入可能割合 {_fmt(fe['購入可能割合'] * 100 if fe['購入可能割合'] is not None else None)}%")
