@@ -312,3 +312,146 @@ def test_same_day_rerun_overwrites_same_files(tmp_path):
     ]
     assert (tmp_path / second["完成版CSV"]).read_bytes() == csv_bytes_first
     assert second["状態"] == "complete"
+
+
+# --- 休場日判定（JPX / 東証カレンダー XTKS）---
+
+SUNDAY = datetime(2026, 11, 8, 15, 30, 0, tzinfo=JST)       # 日曜
+CULTURE_DAY = datetime(2026, 11, 3, 15, 30, 0, tzinfo=JST)  # 文化の日（火曜）
+
+
+def _tracking_fetchers():
+    """呼ばれたら記録するモック取得関数。休場日は呼ばれてはならない。"""
+    calls = {"batch": 0, "single": 0}
+
+    def batch(symbols):
+        calls["batch"] += 1
+        return {s: (TODAY_FRAME, None) for s in symbols}
+
+    def single(symbol):
+        calls["single"] += 1
+        return TODAY_FRAME, None
+
+    return batch, single, calls
+
+
+def test_sunday_is_no_current_day_data_without_fetch(tmp_path):
+    batch, single, calls = _tracking_fetchers()
+    status = run_daily_scan.execute(tmp_path, batch, single, now=SUNDAY)
+    assert status["状態"] == "no_current_day_data"
+    assert status["期待データ日"] == "2026-11-08"
+    assert status["休場日"] is True
+    assert calls == {"batch": 0, "single": 0}
+    assert not (tmp_path / "daily_scan_ranking_2026-11-08.csv").exists()
+    saved = json.loads(
+        (tmp_path / "daily_scan_status_2026-11-08.json").read_text(encoding="utf-8")
+    )
+    assert saved["状態"] == "no_current_day_data"
+    assert saved["データ日別件数"] == {}
+    assert saved["失敗銘柄"] == []
+    assert saved["完成版CSV"] is None
+
+
+def test_culture_day_is_no_current_day_data_without_fetch(tmp_path):
+    batch, single, calls = _tracking_fetchers()
+    status = run_daily_scan.execute(tmp_path, batch, single, now=CULTURE_DAY)
+    assert status["状態"] == "no_current_day_data"
+    assert status["期待データ日"] == "2026-11-03"
+    assert status["休場日"] is True
+    assert calls == {"batch": 0, "single": 0}
+    assert not (tmp_path / "daily_scan_ranking_2026-11-03.csv").exists()
+    assert (tmp_path / "daily_scan_status_2026-11-03.json").exists()
+
+
+def test_holiday_run_keeps_existing_csv(tmp_path):
+    frames = all_today_frames()
+    first = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW
+    )
+    assert first["状態"] == "complete"
+    csv_path = tmp_path / first["完成版CSV"]
+    csv_bytes = csv_path.read_bytes()
+
+    batch, single, calls = _tracking_fetchers()
+    holiday = run_daily_scan.execute(tmp_path, batch, single, now=SUNDAY)
+    assert holiday["状態"] == "no_current_day_data"
+    assert calls == {"batch": 0, "single": 0}
+    assert csv_path.exists()
+    assert csv_path.read_bytes() == csv_bytes
+
+
+# --- 判定不能時は休場と決めつけず、従来どおり株価データで判断する ---
+
+def test_calendar_undecided_falls_back_to_scan(tmp_path):
+    frames = all_today_frames()
+    status = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW,
+        trading_day_checker=lambda day: None,
+    )
+    assert status["状態"] == "complete"
+    assert status["休場日"] is False
+    assert (tmp_path / f"daily_scan_ranking_{EXPECTED}.csv").exists()
+
+
+def test_calendar_checker_error_falls_back_to_scan(tmp_path):
+    frames = all_today_frames()
+
+    def boom(day):
+        raise RuntimeError("calendar boom")
+
+    status = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW,
+        trading_day_checker=boom,
+    )
+    assert status["状態"] == "complete"
+    assert status["休場日"] is False
+
+
+def test_calendar_checker_false_skips_scan(tmp_path):
+    batch, single, calls = _tracking_fetchers()
+    status = run_daily_scan.execute(
+        tmp_path, batch, single, now=NOW,
+        trading_day_checker=lambda day: False,
+    )
+    assert status["状態"] == "no_current_day_data"
+    assert calls == {"batch": 0, "single": 0}
+
+
+# --- 終了コード：complete / no_current_day_data = 0、incomplete = 2、error = 1 ---
+
+def _main_with_status(monkeypatch, state):
+    def fake_execute(out_dir, **_kwargs):
+        return {"状態": state}
+
+    monkeypatch.setattr(run_daily_scan, "execute", fake_execute)
+
+
+def test_main_returns_0_for_complete(tmp_path, monkeypatch, capsys):
+    _main_with_status(monkeypatch, "complete")
+    assert run_daily_scan.main(["--out-dir", str(tmp_path)]) == 0
+
+
+def test_main_returns_0_for_no_current_day_data(tmp_path, monkeypatch, capsys):
+    _main_with_status(monkeypatch, "no_current_day_data")
+    assert run_daily_scan.main(["--out-dir", str(tmp_path)]) == 0
+
+
+def test_main_returns_2_for_incomplete(tmp_path, monkeypatch, capsys):
+    _main_with_status(monkeypatch, "incomplete")
+    assert run_daily_scan.main(["--out-dir", str(tmp_path)]) == 2
+
+
+def test_main_returns_1_for_error(tmp_path, monkeypatch, capsys):
+    _main_with_status(monkeypatch, "error")
+    assert run_daily_scan.main(["--out-dir", str(tmp_path)]) == 1
+
+
+def test_is_trading_day_out_of_range_returns_none():
+    # 現行カレンダーの収録範囲外（2027-11-08 まで）の日付は判定不能。
+    # 依存 exchange_calendars==4.13.2 に固定されているため決定的。
+    from datetime import date
+
+    assert run_daily_scan.is_trading_day(date(2031, 6, 2)) is None
+    assert run_daily_scan.is_trading_day(date(2026, 11, 9)) is True
+    assert run_daily_scan.is_trading_day(date(2026, 11, 8)) is False
+    assert run_daily_scan.is_trading_day(date(2026, 11, 3)) is False

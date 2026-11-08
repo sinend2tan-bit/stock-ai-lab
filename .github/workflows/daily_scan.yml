@@ -32,7 +32,21 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run daily scan
-        run: python run_daily_scan.py --out-dir output
+        id: scan
+        run: |
+          set +e
+          python run_daily_scan.py --out-dir output
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Fail on scan error
+        if: steps.scan.outputs.exit_code != '0' && steps.scan.outputs.exit_code != '2'
+        run: |
+          echo "::error::デイリースキャンで内部エラーが発生しました。状態JSONを確認してください。"
+          exit 1
+
+      - name: Warn on incomplete business-day data
+        if: steps.scan.outputs.exit_code == '2'
+        run: echo "::warning::営業日のデータが揃わず完成版CSVを出しませんでした。状態JSONを確認してください。"
 
       - name: Upload scan output
         if: always()
