@@ -186,6 +186,111 @@ def test_internal_exception_writes_error_status(tmp_path):
     assert saved["期待データ日"] == EXPECTED
 
 
+# --- CSV生成の例外：error 状態を状態JSONに記録する ---
+
+def test_csv_generation_failure_records_error_status(tmp_path, monkeypatch):
+    def boom(ranked, excluded):
+        raise ValueError("csv boom")
+
+    monkeypatch.setattr(scan, "scan_to_csv", boom)
+    frames = all_today_frames()
+    status = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW
+    )
+    assert status["状態"] == "error"
+    assert "保存に失敗" in status["エラー"]
+    assert "csv boom" in status["エラー"]
+    assert status["完成版CSV"] is None
+    assert not (tmp_path / f"daily_scan_ranking_{EXPECTED}.csv").exists()
+    saved = read_status(tmp_path)
+    assert saved["状態"] == "error"
+    assert "csv boom" in saved["エラー"]
+
+
+# --- CSV書き込みの失敗：error 状態を記録し、一時ファイルも残さない ---
+
+def test_csv_write_failure_records_error_status(tmp_path, monkeypatch):
+    original = run_daily_scan._write_bytes_atomic
+
+    def fake(path, data):
+        if str(path).endswith(".csv"):
+            raise OSError("disk full")
+        return original(path, data)
+
+    monkeypatch.setattr(run_daily_scan, "_write_bytes_atomic", fake)
+    frames = all_today_frames()
+    status = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW
+    )
+    assert status["状態"] == "error"
+    assert "保存に失敗" in status["エラー"]
+    assert "disk full" in status["エラー"]
+    assert not (tmp_path / f"daily_scan_ranking_{EXPECTED}.csv").exists()
+    saved = read_status(tmp_path)
+    assert saved["状態"] == "error"
+    assert "disk full" in saved["エラー"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        f"daily_scan_status_{EXPECTED}.json"
+    ]
+
+
+# --- 状態JSONの書き込み失敗：StatusWriteError になり、main は標準エラーに
+# --- 明示して非0で終了する ---
+
+def _fail_status_write(monkeypatch):
+    original = run_daily_scan._write_bytes_atomic
+
+    def fake(path, data):
+        if str(path).endswith(".json"):
+            raise OSError("read-only")
+        return original(path, data)
+
+    monkeypatch.setattr(run_daily_scan, "_write_bytes_atomic", fake)
+
+
+def test_status_write_failure_raises_status_write_error(tmp_path, monkeypatch):
+    _fail_status_write(monkeypatch)
+    frames = all_today_frames()
+    with pytest.raises(run_daily_scan.StatusWriteError):
+        run_daily_scan.execute(
+            tmp_path, batch_with(frames), single_with(frames), now=NOW
+        )
+
+
+def test_status_write_failure_main_reports_to_stderr(tmp_path, monkeypatch, capsys):
+    def raising_execute(out_dir, **_kwargs):
+        raise run_daily_scan.StatusWriteError(
+            "状態JSONの書き込みに失敗しました: OSError: read-only"
+        )
+
+    monkeypatch.setattr(run_daily_scan, "execute", raising_execute)
+    rc = run_daily_scan.main(["--out-dir", str(tmp_path)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "状態JSON" in captured.err
+    assert captured.out == ""
+
+
+# --- 完成後の同日再実行が不完全になった場合、既存の完成版CSVは残る ---
+
+def test_incomplete_rerun_keeps_existing_csv(tmp_path):
+    frames = all_today_frames()
+    first = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW
+    )
+    assert first["状態"] == "complete"
+    csv_path = tmp_path / first["完成版CSV"]
+    csv_bytes = csv_path.read_bytes()
+
+    frames["7203.T"] = make_frame(STALE_END)
+    second = run_daily_scan.execute(
+        tmp_path, batch_with(frames), single_with(frames), now=NOW
+    )
+    assert second["状態"] == "incomplete"
+    assert csv_path.exists()
+    assert csv_path.read_bytes() == csv_bytes
+
+
 # --- 同日再実行：同じファイルを上書きし、重複ファイルが増えない ---
 
 def test_same_day_rerun_overwrites_same_files(tmp_path):

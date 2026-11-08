@@ -10,6 +10,9 @@
   状態JSONだけを書き出す。
 - 出力ファイル名は期待データ日で決定的に決まるため、同日の再実行では
   同じファイルを上書きし、重複ファイルは増えない。
+- 保存は一時ファイル経由の原子的な置換で行う。完成版CSVの生成・書き込みに
+  失敗した場合は、状態=error とエラー内容を状態JSONに記録する。状態JSON
+  自体の書き込みに失敗した場合は、標準エラーに明示して非0で終了する。
 
 使い方: python run_daily_scan.py [--out-dir output]
 終了コード: 0 = 完成版CSVを出した、1 = 状態JSONのみ（不完全またはエラー）。
@@ -17,6 +20,7 @@
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +32,29 @@ import scan
 JST = ZoneInfo("Asia/Tokyo")
 DATE_FORMAT = "%Y-%m-%d"
 NO_DATE_KEY = "なし"
+
+
+class StatusWriteError(RuntimeError):
+    """状態JSONの書き込みに失敗したことを表す。呼び出し側は標準エラーへ
+    明示して非0で終了する（状態を残す手段自体が失われたため）。"""
+
+
+def _write_bytes_atomic(path, data):
+    """一時ファイルに書いてから os.replace で原子的に置き換える。
+
+    書き込み途中の失敗で既存ファイルが壊れた状態にならないようにする。
+    失敗時は一時ファイルを残さない。
+    """
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        tmp_path.write_bytes(data)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _parse_data_date(raw):
@@ -139,16 +166,32 @@ def execute(out_dir, batch_fetcher=None, single_fetcher=None, now=None,
         status["失敗銘柄"] = failures
         if not failures:
             csv_name = f"daily_scan_ranking_{expected_str}.csv"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            (out_dir / csv_name).write_bytes(scan.scan_to_csv(ranked, excluded))
-            status["状態"] = "complete"
-            status["完成版CSV"] = csv_name
+            try:
+                csv_bytes = scan.scan_to_csv(ranked, excluded)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                _write_bytes_atomic(out_dir / csv_name, csv_bytes)
+            except Exception as exc:
+                status["状態"] = "error"
+                status["エラー"] = (
+                    f"完成版CSVの保存に失敗しました: {type(exc).__name__}: {exc}"
+                )
+            else:
+                status["状態"] = "complete"
+                status["完成版CSV"] = csv_name
         else:
             status["状態"] = "incomplete"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / status_name).write_text(
-        json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    status_path = out_dir / status_name
+    payload = (
+        json.dumps(status, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _write_bytes_atomic(status_path, payload)
+    except Exception as exc:
+        raise StatusWriteError(
+            f"状態JSONの書き込みに失敗しました（{status_path}）: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
     return status
 
 
@@ -160,7 +203,11 @@ def main(argv=None):
     parser.add_argument("--out-dir", default="output",
                         help="出力先ディレクトリ（既定: output）")
     args = parser.parse_args(argv)
-    status = execute(args.out_dir)
+    try:
+        status = execute(args.out_dir)
+    except StatusWriteError as exc:
+        print(f"エラー: {exc}", file=sys.stderr)
+        return 1
     print(json.dumps(status, ensure_ascii=False, indent=2))
     return 0 if status["状態"] == "complete" else 1
 
