@@ -4,6 +4,10 @@
 分析・スコア・ランキングの条件は一切変更しない。行うのは次の判定と保存だけ。
 
 - 日本時間（Asia/Tokyo）の当日を「期待データ日」とする。
+- 期待データ日が東証の休場日と確定した場合は、株価取得を呼ばず、
+  完成版CSVなし・状態 no_current_day_data の状態JSONだけを書き出す。
+  カレンダーで判定できない場合（未導入・読込失敗・範囲外）は休場と
+  決めつけず、従来どおり株価データで判断する。
 - 対象60銘柄すべてのデータ日（スキャン結果の「データ最終日」）が
   期待データ日と一致した場合のみ、完成版ランキングCSVを書き出す。
 - 1銘柄でも欠損・古いデータ・取得失敗・日付不正があれば完成版CSVは出さず、
@@ -15,7 +19,9 @@
   自体の書き込みに失敗した場合は、標準エラーに明示して非0で終了する。
 
 使い方: python run_daily_scan.py [--out-dir output]
-終了コード: 0 = 完成版CSVを出した、1 = 状態JSONのみ（不完全またはエラー）。
+終了コード: 0 = 完成版CSVを出した／休場日で状態JSONのみ、
+            2 = 営業日だがデータ不足で状態JSONのみ（警告扱い）、
+            1 = 内部エラー・状態JSON書き込み失敗。
 """
 
 import argparse
@@ -29,9 +35,52 @@ from zoneinfo import ZoneInfo
 import analysis
 import scan
 
+try:
+    import exchange_calendars as _exchange_calendars
+except ImportError:  # 依存未導入時は判定不能として扱う（休場と決めつけない）
+    _exchange_calendars = None
+
 JST = ZoneInfo("Asia/Tokyo")
 DATE_FORMAT = "%Y-%m-%d"
 NO_DATE_KEY = "なし"
+
+
+_UNSET = object()
+_XTKS_CALENDAR = _UNSET
+
+
+def _load_xtks_calendar():
+    """東証（XTKS）のカレンダーを取得する。取得できなければ None。
+
+    結果はモジュール内で一度だけ読み込む。カレンダーの収録範囲外の
+    日付（現行版は 2027-11-08 まで）もここでは扱わず、呼び出し側の
+    is_trading_day が判定不能として返す。
+    """
+    global _XTKS_CALENDAR
+    if _XTKS_CALENDAR is _UNSET:
+        _XTKS_CALENDAR = None
+        if _exchange_calendars is not None:
+            try:
+                _XTKS_CALENDAR = _exchange_calendars.get_calendar("XTKS")
+            except Exception:
+                _XTKS_CALENDAR = None
+    return _XTKS_CALENDAR
+
+
+def is_trading_day(day):
+    """東証（XTKS）の営業日かを判定する。
+
+    戻り値: True=営業日、False=休場日（確定）、None=判定不能
+    （カレンダー未導入・読込失敗・範囲外）。判定不能のときは休場と
+    決めつけず、呼び出し側は従来どおり株価データで判断する。
+    """
+    calendar = _load_xtks_calendar()
+    if calendar is None:
+        return None
+    try:
+        return bool(calendar.is_session(day))
+    except Exception:
+        return None
 
 
 class StatusWriteError(RuntimeError):
@@ -116,10 +165,13 @@ def assess_rows(universe, ranked, excluded, expected_date):
 
 
 def execute(out_dir, batch_fetcher=None, single_fetcher=None, now=None,
-            universe=None, scan_runner=None):
+            universe=None, scan_runner=None, trading_day_checker=None):
     """スキャンを実行し、完成版CSV（条件を満たす場合のみ）と状態JSONを書き出す。
 
     取得関数とスキャン実行関数は差し替え可能（テストはモックを注入する）。
+    trading_day_checker は期待データ日を受け取り、営業日なら True、
+    休場日なら False、判定不能なら None を返す関数。未指定時は
+    is_trading_day（東証カレンダー）を使う。
     戻り値: 状態 dict（状態JSONに書いた内容）。
     """
     out_dir = Path(out_dir)
@@ -131,6 +183,8 @@ def execute(out_dir, batch_fetcher=None, single_fetcher=None, now=None,
         single_fetcher = lambda symbol: analysis.fetch_history(symbol, scan.SCAN_PERIOD)
     if scan_runner is None:
         scan_runner = scan.run_scan
+    if trading_day_checker is None:
+        trading_day_checker = is_trading_day
     if now is None:
         now = datetime.now(JST)
     elif now.tzinfo is None:
@@ -146,6 +200,7 @@ def execute(out_dir, batch_fetcher=None, single_fetcher=None, now=None,
         "タイムゾーン": "Asia/Tokyo",
         "期待データ日": expected_str,
         "状態": "error",
+        "休場日": False,
         "対象数": len(universe),
         "データ日別件数": {},
         "失敗銘柄": [],
@@ -153,13 +208,23 @@ def execute(out_dir, batch_fetcher=None, single_fetcher=None, now=None,
         "状態ファイル": status_name,
         "エラー": None,
     }
-    ranked = excluded = None
     try:
-        ranked, excluded, _meta = scan_runner(
-            universe, batch_fetcher, single_fetcher, run_at=run_at
-        )
-    except Exception as exc:
-        status["エラー"] = f"{type(exc).__name__}: {exc}"
+        business_day = trading_day_checker(expected)
+    except Exception:
+        # 判定関数の例外も「判定不能」と同じ扱いにする。休場と決めつけない。
+        business_day = None
+    ranked = excluded = None
+    if business_day is False:
+        # 休場日が確定：株価取得を呼ばず、状態JSONだけを保存する。
+        status["状態"] = "no_current_day_data"
+        status["休場日"] = True
+    else:
+        try:
+            ranked, excluded, _meta = scan_runner(
+                universe, batch_fetcher, single_fetcher, run_at=run_at
+            )
+        except Exception as exc:
+            status["エラー"] = f"{type(exc).__name__}: {exc}"
     if ranked is not None:
         counts, failures = assess_rows(universe, ranked, excluded, expected)
         status["データ日別件数"] = counts
@@ -209,7 +274,12 @@ def main(argv=None):
         print(f"エラー: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(status, ensure_ascii=False, indent=2))
-    return 0 if status["状態"] == "complete" else 1
+    state = status["状態"]
+    if state in ("complete", "no_current_day_data"):
+        return 0
+    if state == "incomplete":
+        return 2
+    return 1
 
 
 if __name__ == "__main__":
