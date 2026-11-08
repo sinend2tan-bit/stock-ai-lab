@@ -61,12 +61,13 @@ python tests/manual_live_fetch_check.py
 
 1. GitHub のリポジトリで「Actions」タブを開き、左の一覧から「Daily Scan (manual)」を選びます。
 2. 「Run workflow」でブランチが `main` であることを確認して実行します。
-3. 実行が終わるまで待ちます（通常1分以内）。結果は成功・失敗にかかわらず Artifact に保存されます。
+3. 実行が終わるまで待ちます（通常1分以内）。スキャン処理まで進んだ実行では、結果が Artifact に保存されます。
 
 結果の取得方法:
 
 - 実行ページの下部「Artifacts」にある `daily-scan-<実行ID>` をダウンロードします（保持期間は30日）。
-- 中には状態JSON（`daily_scan_status_<日付>.json`）が必ず入り、状態が `complete` のときだけ完成版CSVも入ります。
+- スキャン処理が状態JSONを出力できた場合は、その状態JSON（`daily_scan_status_<日付>.json`）が入り、状態が `complete` のときだけ完成版CSVも入ります。
+- チェックアウトや依存関係のインストールなど、スキャンスクリプトの起動前に失敗した場合は、Artifact や状態JSONが存在しないことがあります。その場合は結果を利用せず、Actions の実行ログで失敗した箇所を確認してください。
 
 状態JSONの「状態」の意味:
 
