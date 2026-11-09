@@ -9,17 +9,28 @@
   依存しない独立モジュールとする。
 - 日付間隔の疑わしさは、公式休場日カレンダーがない段階では異常と確定せず
   「要確認」の警告に留める（週末またぎは異常にしない）。
+- 未来日付の判定基準は、呼び出し側が as_of（基準日）か market（市場の
+  タイムゾーン指定）のどちらかを必ず明示する。実行環境のローカル日付で
+  既定判定はしない（市場現地日付とずれるため）。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
 
 REQUIRED_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 PRICE_COLUMNS = ("Open", "High", "Low", "Close")
+
+# 市場の現地タイムゾーン（analysis.MARKET_TIMEZONES と同じ表記・同じ値）
+MARKET_TIMEZONES = {
+    "JP": ZoneInfo("Asia/Tokyo"),
+    "US": ZoneInfo("America/New_York"),
+}
 
 # 重要度の区分（診断結果の分類であり、売買判定や除外判定ではない）
 SEVERITY_ANOMALY = "異常候補"
@@ -138,12 +149,46 @@ def _numeric(view: pd.DataFrame, column: str) -> np.ndarray:
     return pd.to_numeric(view[column], errors="coerce").to_numpy(dtype=float)
 
 
-def diagnose_history(df, *, as_of=None, required_columns=REQUIRED_COLUMNS) -> DataQualityReport:
+def _reference_date(as_of, market, now_utc) -> pd.Timestamp:
+    """未来日付の判定基準日（市場現地日付）を決める。
+
+    as_of が指定されていればそれを基準日とする。as_of が無い場合は
+    market（"JP" / "US"）の現地タイムゾーンでの現在日付を使う。
+    どちらも無い場合は、実行環境の日付で曖昧に判定せず ValueError にする。
+    now_utc はテスト用に現在時刻（UTC）を注入するためのものである。
+    """
+    if as_of is not None:
+        return _naive(pd.Timestamp(as_of)).normalize()
+    if market is None:
+        raise ValueError(
+            "未来日付の判定には as_of（基準日）か market（市場）の指定が必要です"
+        )
+    if market not in MARKET_TIMEZONES:
+        raise ValueError(
+            f"market は {sorted(MARKET_TIMEZONES)} のいずれかを指定してください: {market!r}"
+        )
+    tz = MARKET_TIMEZONES[market]
+    if now_utc is None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = pd.Timestamp(now_utc).to_pydatetime()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+    return pd.Timestamp(now.astimezone(tz).date())
+
+
+def diagnose_history(
+    df, *, as_of=None, market=None, now_utc=None, required_columns=REQUIRED_COLUMNS
+) -> DataQualityReport:
     """株価DataFrameの品質を診断し、結果だけを返す。入力は変更しない。
 
     引数:
         df: 日付インデックスと OHLCV 列を持つDataFrame（整形前・整形後どちらでも可）。
-        as_of: 未来日付の判定基準日。None の場合は実行日の日付。
+        as_of: 未来日付の判定基準日。指定した場合はこれを優先する。
+        market: as_of が無い場合に、市場現地日付を求めるための市場（"JP" / "US"）。
+            as_of と market のどちらも指定しない場合は ValueError になる
+            （実行環境のローカル日付では判定しない）。
+        now_utc: market 指定時に使う現在時刻（UTC）。テスト用の注入点。
         required_columns: 必要列（既定は analysis.NEEDED_COLUMNS と同じ5列）。
 
     戻り値:
@@ -207,11 +252,8 @@ def diagnose_history(df, *, as_of=None, required_columns=REQUIRED_COLUMNS) -> Da
         prev = ts
     report.monotonic_increasing = not report.out_of_order
 
-    # 未来日付
-    if as_of is None:
-        as_of_ts = pd.Timestamp.now().normalize()
-    else:
-        as_of_ts = _naive(pd.Timestamp(as_of)).normalize()
+    # 未来日付（基準日は as_of か market の明示が必須。既定では判定しない）
+    as_of_ts = _reference_date(as_of, market, now_utc)
     for i, ts in valid:
         if ts.normalize() > as_of_ts:
             report.future_dates.append({"row": i, "date": ts.strftime("%Y-%m-%d")})
@@ -278,23 +320,52 @@ def diagnose_history(df, *, as_of=None, required_columns=REQUIRED_COLUMNS) -> Da
                 price_issues["non_positive"].append(
                     {"row": i, "date": labels[i], "column": col, "detail": f"value={v}"}
                 )
-    if all(c in arrays for c in ("Open", "Close", "High")):
-        oc_max = np.fmax(arrays["Open"], arrays["Close"])
-        both = np.isfinite(arrays["Open"]) & np.isfinite(arrays["Close"])
+    # High/Low と Open/Close の比較は、利用可能な有限値を個別に使う。
+    # Open と Close の両方が有限値でなくても、片方だけでも比較できる場合は判定する
+    # （欠損値そのものは上の non_finite で別途記録される）。
+    if "High" in arrays:
+        high = arrays["High"]
         for i in range(n):
-            if both[i] and np.isfinite(arrays["High"][i]) and arrays["High"][i] < oc_max[i]:
+            h = high[i]
+            if not np.isfinite(h):
+                continue
+            refs = [
+                (name, arrays[name][i])
+                for name in ("Open", "Close")
+                if name in arrays and np.isfinite(arrays[name][i])
+            ]
+            if not refs:
+                continue
+            ref_max = max(v for _, v in refs)
+            if h < ref_max:
+                if len(refs) == 2:
+                    detail = f"High={h} < max(Open, Close)={ref_max}"
+                else:
+                    detail = f"High={h} < {refs[0][0]}={ref_max}"
                 price_issues["high_below_open_close"].append(
-                    {"row": i, "date": labels[i], "column": "High",
-                     "detail": f"High={arrays['High'][i]} < max(Open, Close)={oc_max[i]}"}
+                    {"row": i, "date": labels[i], "column": "High", "detail": detail}
                 )
-    if all(c in arrays for c in ("Open", "Close", "Low")):
-        oc_min = np.fmin(arrays["Open"], arrays["Close"])
-        both = np.isfinite(arrays["Open"]) & np.isfinite(arrays["Close"])
+    if "Low" in arrays:
+        low_arr = arrays["Low"]
         for i in range(n):
-            if both[i] and np.isfinite(arrays["Low"][i]) and arrays["Low"][i] > oc_min[i]:
+            low_v = low_arr[i]
+            if not np.isfinite(low_v):
+                continue
+            refs = [
+                (name, arrays[name][i])
+                for name in ("Open", "Close")
+                if name in arrays and np.isfinite(arrays[name][i])
+            ]
+            if not refs:
+                continue
+            ref_min = min(v for _, v in refs)
+            if low_v > ref_min:
+                if len(refs) == 2:
+                    detail = f"Low={low_v} > min(Open, Close)={ref_min}"
+                else:
+                    detail = f"Low={low_v} > {refs[0][0]}={ref_min}"
                 price_issues["low_above_open_close"].append(
-                    {"row": i, "date": labels[i], "column": "Low",
-                     "detail": f"Low={arrays['Low'][i]} > min(Open, Close)={oc_min[i]}"}
+                    {"row": i, "date": labels[i], "column": "Low", "detail": detail}
                 )
     if "High" in arrays and "Low" in arrays:
         for i in range(n):

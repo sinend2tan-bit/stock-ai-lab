@@ -5,6 +5,7 @@
 """
 
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -93,6 +94,55 @@ def test_dates_future_detected():
     assert r.future_dates == [{"row": 4, "date": "2024-01-10"}]
 
 
+def test_dates_future_reference_must_be_explicit():
+    # as_of も market も指定しない既定動作は、実行環境の日付で曖昧に判定せずエラー
+    with pytest.raises(ValueError):
+        diagnose_history(make_frame(NORMAL_DATES))
+
+
+def test_dates_future_unknown_market_rejected():
+    with pytest.raises(ValueError):
+        diagnose_history(make_frame(NORMAL_DATES), market="UK")
+
+
+# 2024-01-10 01:00 UTC = 東京 2024-01-10 10:00 / ニューヨーク 2024-01-09 20:00
+BOUNDARY_NOW_UTC = datetime(2024, 1, 10, 1, 0, tzinfo=timezone.utc)
+
+
+def test_dates_future_market_jp_boundary():
+    # UTCホストでも、市場（東京）の当日バーは未来日付と誤判定しない
+    r = diagnose_history(
+        make_frame(NORMAL_DATES), market="JP", now_utc=BOUNDARY_NOW_UTC
+    )
+    assert r.future_dates == []
+
+
+def test_dates_future_market_us_boundary():
+    # 同じ時刻でもニューヨークは前日なので、2024-01-10 のバーは未来日付になる
+    r = diagnose_history(
+        make_frame(NORMAL_DATES), market="US", now_utc=BOUNDARY_NOW_UTC
+    )
+    assert r.future_dates == [{"row": 4, "date": "2024-01-10"}]
+
+
+def test_dates_future_market_us_same_day_bar_not_future():
+    # ニューヨーク取引時間内（2024-01-10 16:00 UTC = 現地 11:00）は当日バーを未来にしない
+    now = datetime(2024, 1, 10, 16, 0, tzinfo=timezone.utc)
+    r = diagnose_history(make_frame(NORMAL_DATES), market="US", now_utc=now)
+    assert r.future_dates == []
+
+
+def test_dates_future_as_of_takes_precedence_over_market():
+    # as_of を明示した場合は、market / now_utc より as_of を優先する
+    r = diagnose_history(
+        make_frame(NORMAL_DATES),
+        as_of="2024-01-09",
+        market="JP",
+        now_utc=BOUNDARY_NOW_UTC,
+    )
+    assert r.future_dates == [{"row": 4, "date": "2024-01-10"}]
+
+
 def test_gap_skipping_weekday_is_review_only():
     # 金→火で月曜を飛ばす間隔は、休場日の可能性があるため異常確定せず「要確認」
     dates = ["2024-01-05", "2024-01-09"]
@@ -145,6 +195,79 @@ def test_ohlc_low_above_open_close():
     rows = [e["row"] for e in r.price_issues["low_above_open_close"]]
     assert rows == [2]
     assert r.price_issues["low_above_open_close"][0]["column"] == "Low"
+
+
+def test_ohlc_high_compared_when_open_missing():
+    # Open が欠損でも、残っている Close と High の整合性は検査する
+    df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, np.nan, 100.0, 100.0, 100.0],
+        high=[101.0, 99.0, 101.0, 101.0, 101.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    rows = [e["row"] for e in r.price_issues["high_below_open_close"]]
+    assert rows == [1]
+    # Open の NaN 自体は従来どおり non_finite に記録される
+    assert (1, "Open") in {
+        (e["row"], e["column"]) for e in r.price_issues["non_finite"]
+    }
+
+
+def test_ohlc_high_compared_when_close_missing():
+    # Close が欠損でも、残っている Open と High の整合性は検査する
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, np.nan, 100.0, 100.0, 100.0],
+        high=[101.0, 99.0, 101.0, 101.0, 101.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    rows = [e["row"] for e in r.price_issues["high_below_open_close"]]
+    assert rows == [1]
+    assert (1, "Close") in {
+        (e["row"], e["column"]) for e in r.price_issues["non_finite"]
+    }
+
+
+def test_ohlc_low_compared_when_open_missing():
+    # Open が欠損でも、残っている Close と Low の整合性は検査する
+    df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, 100.0, np.nan, 100.0, 100.0],
+        low=[99.0, 99.0, 100.5, 99.0, 99.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    rows = [e["row"] for e in r.price_issues["low_above_open_close"]]
+    assert rows == [2]
+    assert (2, "Open") in {
+        (e["row"], e["column"]) for e in r.price_issues["non_finite"]
+    }
+
+
+def test_ohlc_low_compared_when_close_missing():
+    # Close が欠損でも、残っている Open と Low の整合性は検査する
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, np.nan, 100.0, 100.0],
+        low=[99.0, 99.0, 100.5, 99.0, 99.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    rows = [e["row"] for e in r.price_issues["low_above_open_close"]]
+    assert rows == [2]
+    assert (2, "Close") in {
+        (e["row"], e["column"]) for e in r.price_issues["non_finite"]
+    }
+
+
+def test_ohlc_one_side_missing_consistent_no_false_positive():
+    # 片方が欠損でも、残っている値と整合していれば検出しない
+    df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, np.nan, 100.0, 100.0, 100.0],
+        close=[100.0, 100.0, np.nan, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.price_issues["high_below_open_close"] == []
+    assert r.price_issues["low_above_open_close"] == []
 
 
 def test_ohlc_high_below_low():
