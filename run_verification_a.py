@@ -29,8 +29,16 @@ def main(argv=None):
     parser.add_argument("--note", default=None, help="出力に残す注記")
     args = parser.parse_args(argv)
 
-    with open(args.records_csv, "rb") as f:
-        records = forward.records_from_csv(f.read())
+    try:
+        with open(args.records_csv, "rb") as f:
+            records = forward.records_from_csv(f.read())
+    except OSError as exc:
+        # 存在しないパス等の指定ミスでトレースバックを出さず、原因を明示する。
+        print(
+            f"指定したファイルを開けませんでした: {args.records_csv} ({exc})",
+            file=sys.stderr,
+        )
+        return 1
     if not records:
         print("登録CSVを読み込めませんでした（列構成が想定と異なる可能性があります）",
               file=sys.stderr)

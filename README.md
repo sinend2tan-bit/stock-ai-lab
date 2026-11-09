@@ -7,19 +7,28 @@
 - `analysis.py` : 分析ロジック（データ取得、指標計算、短期・中期・長期の条件評価、データの新旧判定）
 - `verify.py` : 検証ロジック（過去データでの評価の再現、採点、集計、CSV保存・復元）
 - `scan.py` : スキャンロジック（対象銘柄リスト、一括取得、ランキング、CSV出力）
+- `forward.py` : フォワード登録と比較・採用ゲートのロジック（V1・V2の並行評価）
+- `scoring_v2.py` : 新仕様（V2）の方向判定ロジック
+- `verification_a.py` : 検証A（短期フォワード仮想売買評価）のロジック
 - `run_daily_scan.py` : 手動スキャンの実行入口（東証休場日とデータのそろい具合を判定し、状態JSONと完成版CSVを保存）
+- `run_verification_a.py` : 検証Aの実行入口
 - `requirements.txt` : 必要ライブラリ（動作確認したバージョンで固定）
 - `tests/test_analysis.py` : 分析ロジックの単体テスト（通信はモック化しており、ネットワークなしで実行できます）
 - `tests/test_verify.py` : 検証ロジックの単体テスト（ネットワークなしで実行できます）
 - `tests/test_scan.py` : スキャンロジックの単体テスト（ネットワークなしで実行できます）
 - `tests/test_daily_scan.py` : 手動スキャンの単体テスト（ネットワークなしで実行できます）
+- `tests/test_forward.py` : フォワード登録・CSV互換の単体テスト（ネットワークなしで実行できます）
+- `tests/test_forward_v2.py` : V1・V2並行比較と採用ゲートの単体テスト（ネットワークなしで実行できます）
+- `tests/test_scoring_v2.py` : 新仕様（V2）方向判定の単体テスト（ネットワークなしで実行できます）
+- `tests/test_verification_a.py` : 検証Aの単体テスト（ネットワークなしで実行できます）
+- `tests/test_app_smoke.py` : アプリ画面のスモークテスト（ネットワークなしで実行できます）
 - `tests/manual_live_fetch_check.py` : 実データ取得の手動確認スクリプト（単体テストには含まれません）
 - `.gitignore` : 不要ファイル除外
 
 ## テストの実行方法
 単体テスト（ネットワーク不要）:
 ```
-pip install -r requirements.txt pytest
+pip install -r requirements.txt pytest==9.2.0
 python -m pytest tests/ -q
 ```
 実データ取得の手動確認（実際にYahoo Financeへアクセスします。通信障害や取得制限で結果が変わることがあります）:
