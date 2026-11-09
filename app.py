@@ -133,6 +133,19 @@ def _regime_at(indicators, base_date):
     return "上昇相場" if (float(close) >= float(ema200) and ret60 >= 0) else "非上昇相場"
 
 
+def _format_gate_actual(actual):
+    """採用ゲート表の「実績」表示用。未評価のタプル (None, None) を「－」にする。
+
+    的中率の項目は (V1, V2)・(V1, V2, 常時上昇) のタプルで返る。評価済みが
+    まだ無いと要素がすべて None になり、表に "(None, None)" と出てしまう
+    ため、その場合だけ「－」に置き換える。数値が入っている場合は表示を
+    変えない。forward.py の計算値は変えない（表示だけの修正）。
+    """
+    if isinstance(actual, tuple) and all(v is None for v in actual):
+        return "－"
+    return actual
+
+
 tab_overview, tab_detail, tab_journal, tab_verify, tab_scan, tab_notes = st.tabs(
     ["銘柄一覧", "個別分析", "仮想売買メモ", "検証", "スキャン", "使い方・注意"]
 )
@@ -269,7 +282,15 @@ with tab_journal:
             "想定エントリー": entry, "想定損切り": stop, "想定利確": target,
             "終了価格": exit_price, "メモ": note, "結果": result
         }
-        st.session_state.journal = pd.concat([st.session_state.journal, pd.DataFrame([new_row])], ignore_index=True)
+        new_df = pd.DataFrame([new_row])
+        if st.session_state.journal.empty:
+            # 空のメモ帳への concat は pandas の FutureWarning になるため、
+            # 初回はそのまま代入する（2件目以降は従来どおり concat）。
+            st.session_state.journal = new_df
+        else:
+            st.session_state.journal = pd.concat(
+                [st.session_state.journal, new_df], ignore_index=True
+            )
         st.success("このセッションにメモを追加しました。CSVで保存してください。")
     st.dataframe(st.session_state.journal, width="stretch", hide_index=True)
     st.download_button(
@@ -1048,7 +1069,7 @@ with tab_scan:
                     gate_rows.append(
                         {
                             "項目": item["項目"], "基準": item["基準"],
-                            "実績": item["実績"], "判定": mark,
+                            "実績": _format_gate_actual(item["実績"]), "判定": mark,
                         }
                     )
                 st.dataframe(
@@ -1065,10 +1086,16 @@ with tab_scan:
                     )
                 dep = gate["銘柄依存"]
                 if dep["依存警告"]:
+                    loo = dep["最多銘柄を除いた差分平均pct"]
+                    loo_text = (
+                        f"{loo}%"
+                        if loo is not None
+                        else "算出不可（比較できる他の銘柄がありません）"
+                    )
                     st.warning(
                         f"注意：差分の多くが銘柄 {dep['最多銘柄']} に偏っています"
                         f"（寄与率 {dep['寄与率'] * 100:.0f}%）。"
-                        f"その銘柄を除いた差分平均は {dep['最多銘柄を除いた差分平均pct']}% です。"
+                        f"その銘柄を除いた差分平均は {loo_text} です。"
                     )
                 fb = gate["再取得フォールバック"]
                 if fb["コホート数"]:

@@ -5,6 +5,7 @@
 """
 
 import sys
+import warnings
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import forward
 import scoring_v2
 from streamlit.testing.v1 import AppTest
+from test_forward_v2 import pair, res
 
 APP_PATH = str(Path(__file__).resolve().parents[1] / "app.py")
 SCAN_ID = "2026-10-19 15:30:00"
@@ -89,3 +91,68 @@ def test_app_dual_registration_from_seeded_scan():
     versions = sorted({int(r["スコア仕様バージョン"]) for r in records})
     assert versions == [1, 2]
     assert "V1 1 件・V2 1 件" in at.session_state["fwd_register_note"]
+
+
+def _find_gate_dataframe(at):
+    for element in at.dataframe:
+        value = element.value
+        if list(value.columns) == ["項目", "基準", "実績", "判定"]:
+            return value
+    return None
+
+
+def test_gate_table_shows_dash_for_unevaluated_hit_rates():
+    """未評価のゲート項目は実績に "(None, None)" と出さず「－」にする。"""
+    v1 = forward.build_records([scan_row()], [], META, {})
+    v2 = forward.build_records(
+        [scan_row(中期スコア=-3)], [], META, {},
+        scoring_version=2, direction_fn=scoring_v2.direction_from_score_v2,
+    )
+    at = AppTest.from_file(APP_PATH)
+    at.session_state["fwd_records"] = v1 + v2
+    at.session_state["fwd_results"] = []
+    at.run(timeout=180)
+    assert not at.exception
+    gate_df = _find_gate_dataframe(at)
+    assert gate_df is not None
+    actuals = [str(v) for v in gate_df["実績"]]
+    assert not any("(None" in v for v in actuals)
+    hit_row = gate_df[gate_df["項目"].str.contains("非劣性")]
+    assert len(hit_row) == 1
+    assert hit_row["実績"].iloc[0] == "－"
+
+
+def test_gate_dependence_warning_without_other_symbol():
+    """依存警告で比較できる他銘柄が無いときは「None%」と出さない。"""
+    records, results = [], []
+    for k in range(20):
+        scan_id = f"2026-{1 + k // 4:02d}-{1 + (k % 4) * 7:02d} 15:30:00"
+        records += pair(scan_id, "A.T", "下落", "下落注意")
+        results.append(res(scan_id, "A.T", 20, 1, 3.0, exc=2.0))
+    at = AppTest.from_file(APP_PATH)
+    at.session_state["fwd_records"] = records
+    at.session_state["fwd_results"] = results
+    at.run(timeout=180)
+    assert not at.exception
+    warnings_text = " ".join(str(w.value) for w in at.warning)
+    assert "None%" not in warnings_text
+    assert "算出不可" in warnings_text
+
+
+def test_journal_first_entry_no_future_warning():
+    """仮想売買メモの初回追加で pandas の FutureWarning が出ない。"""
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    submit = [b for b in at.button if (b.label or "") == "メモを追加"]
+    assert len(submit) == 1
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        submit[0].click().run(timeout=180)
+    assert not at.exception
+    assert len(at.session_state["journal"]) == 1
+    concat_warnings = [
+        str(w.message) for w in caught
+        if issubclass(w.category, FutureWarning)
+        and "concatenation" in str(w.message)
+    ]
+    assert concat_warnings == []
