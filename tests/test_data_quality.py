@@ -504,3 +504,313 @@ def test_report_to_dict_summary_counts():
     assert d["anomaly_count"] == 0
     assert d["review_count"] == 0
     assert d["index_is_datetime"] is True
+
+
+# ---------- 7. 境界条件：重複列名（入力契約） ----------
+
+from datetime import date as _date
+from decimal import Decimal
+
+
+def test_boundary_duplicate_columns_plain_rejected():
+    # 必須列の重複は列の特定が曖昧になるため、契約外として明示的にエラー
+    df = pd.concat([make_frame(NORMAL_DATES)[["Open"]], make_frame(NORMAL_DATES)], axis=1)
+    assert list(df.columns).count("Open") == 2
+    with pytest.raises(ValueError, match="重複"):
+        diagnose_history(df, as_of=AS_OF)
+
+
+def test_boundary_duplicate_columns_multiindex_two_tickers_rejected():
+    # 複数銘柄の MultiIndex を先頭レベルだけ平坦化すると列名が重複する
+    idx = pd.bdate_range("2024-01-04", periods=5)
+    cols = pd.MultiIndex.from_product(
+        [["Open", "High", "Low", "Close", "Volume"], ["7203.T", "6758.T"]]
+    )
+    data = np.tile(np.array([100.0, 101.0, 99.0, 100.0, 1000.0]), (5, 2))
+    df = pd.DataFrame(data, index=idx, columns=cols)
+    with pytest.raises(ValueError, match="重複"):
+        diagnose_history(df, as_of=AS_OF)
+
+
+def test_boundary_duplicate_nonrequired_column_rejected():
+    # 必須列でない列の重複も、列名による特定が曖昧になるため契約外とする
+    df = make_frame(NORMAL_DATES)
+    df["Adj Close"] = 100.0
+    df = pd.concat([df, df[["Adj Close"]]], axis=1)
+    with pytest.raises(ValueError, match="重複"):
+        diagnose_history(df, as_of=AS_OF)
+
+
+# ---------- 8. 境界条件：日付インデックス ----------
+
+
+def test_boundary_index_mixed_timezone_strings():
+    # 形式の混在した文字列は例外にせず、解釈できた日付だけを使う。
+    # 先頭要素と形式が異なる要素は NaT として記録する（現行仕様の固定）
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.Index(
+        [
+            "2024-01-04",
+            "2024-01-05T00:00:00+09:00",
+            "2024-01-08",
+            "2024-01-09T00:00:00-05:00",
+            "2024-01-10",
+        ]
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is True
+    assert r.nat_rows == [1, 3]
+    assert r.nat_count == 2
+
+
+def test_boundary_index_unparseable_strings_all_nat():
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.Index(["foo", "bar", "baz", "qux", "zzz"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is False
+    assert r.nat_count == 5
+    assert r.nat_rows == [0, 1, 2, 3, 4]
+
+
+def test_boundary_index_numeric_not_datetime():
+    # 数値インデックスは日付として解釈せず、全行 NaT として扱う（例外にしない）
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.RangeIndex(5)
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is False
+    assert r.nat_count == 5
+
+
+def test_boundary_index_int_yyyymmdd_not_parsed_as_date():
+    # YYYYMMDD 形式の整数も日付とは解釈しない（黙って日付化しない）
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.Index([20240104, 20240105, 20240108, 20240109, 20240110])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is False
+    assert r.nat_count == 5
+
+
+def test_boundary_index_empty_datetime_with_columns():
+    # 列はあるが0行（空の DatetimeIndex）は例外なく空の診断になる
+    df = make_frame([])
+    assert isinstance(df.index, pd.DatetimeIndex)
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.row_count == 0
+    assert r.missing_columns == []
+    assert r.anomaly_count == 0
+    assert r.last_row_missing is False
+
+
+def test_boundary_index_dst_tz_aware():
+    # DST 境界（春の切り替え・秋の切り替え）を含む tz 付きインデックスでも
+    # 例外なく診断でき、当日バー等を誤検出しない
+    for start, as_of in (("2024-03-08", "2024-03-31"), ("2024-11-01", "2024-11-30")):
+        idx = pd.date_range(start, periods=5, freq="D", tz="America/New_York")
+        df = make_frame(NORMAL_DATES)
+        df.index = idx
+        r = diagnose_history(df, as_of=as_of)
+        assert r.index_is_datetime is True
+        assert r.nat_count == 0
+        assert r.anomaly_count == 0
+        assert r.review_gaps == []
+
+
+def test_boundary_index_date_objects():
+    # datetime.date オブジェクトのインデックスは日付として解釈する
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.Index(
+        [_date(2024, 1, 4), _date(2024, 1, 5), _date(2024, 1, 8),
+         _date(2024, 1, 9), _date(2024, 1, 10)]
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is True
+    assert r.nat_count == 0
+    assert r.anomaly_count == 0
+
+
+# ---------- 9. 境界条件：値の型 ----------
+
+
+def test_boundary_numeric_strings_diagnosed_as_numbers():
+    # 数値文字列は数値として診断する（非数値として誤検出しない）
+    df = make_frame(
+        NORMAL_DATES,
+        close=["100.5", "101", "99.9", "100", "102"],
+        volume=["1000"] * 5,
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.price_issues["non_finite"] == []
+    # Close=102 > High=101 の行は、文字列でも整合性違反として検出する
+    assert [e["row"] for e in r.price_issues["high_below_open_close"]] == [4]
+
+
+def test_boundary_non_numeric_strings_nan_in_prices_not_in_missing():
+    # 数値化できない文字列は価格診断では NaN として記録する。
+    # 一方、欠損の可視化は既存 dropna() と同じ基準（元の値の isna）なので
+    # 文字列は欠損に数えない（rows_dropped_by_dropna も増えない）
+    df = make_frame(NORMAL_DATES, close=["abc", "100", "1,000", "", "100"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert [e["row"] for e in r.price_issues["non_finite"]] == [0, 2, 3]
+    assert all(
+        e["detail"] == "NaN" for e in r.price_issues["non_finite"]
+    )
+    assert r.missing_per_column["Close"] == 0
+    assert r.rows_dropped_by_dropna == 0
+
+
+def test_boundary_decimal_values():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[Decimal("100.5"), Decimal("NaN"), Decimal("101"),
+               Decimal("100"), Decimal("100")],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert [(e["row"], e["detail"]) for e in r.price_issues["non_finite"]] == [
+        (1, "NaN")
+    ]
+    # Decimal("NaN") は元の値自体が欠損なので、欠損にも数える
+    assert r.missing_per_column["Close"] == 1
+
+
+def test_boundary_nullable_dtype_with_pd_na():
+    df = make_frame(NORMAL_DATES)
+    df["Close"] = pd.array([100.0, pd.NA, 100.0, 100.0, 100.0], dtype="Float64")
+    df["Volume"] = pd.array([1000, pd.NA, 1000, 1000, 1000], dtype="Int64")
+    r = diagnose_history(df, as_of=AS_OF)
+    assert [(e["row"], e["detail"]) for e in r.price_issues["non_finite"]] == [
+        (1, "NaN")
+    ]
+    assert [(e["row"], e["detail"]) for e in r.volume_issues["non_finite"]] == [
+        (1, "NaN")
+    ]
+    assert r.missing_per_column["Close"] == 1
+    assert r.missing_per_column["Volume"] == 1
+
+
+def test_boundary_inf_strings():
+    df = make_frame(
+        NORMAL_DATES,
+        high=["inf", "101", "101", "101", "101"],
+        low=["99", "99", "99", "99", "-inf"],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    by_col = {(e["column"], e["detail"]) for e in r.price_issues["non_finite"]}
+    assert by_col == {("High", "inf"), ("Low", "-inf")}
+
+
+def test_boundary_object_column_pd_na_and_none():
+    df = make_frame(NORMAL_DATES, close=[100.0, pd.NA, 100.0, 100.0, None])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert [e["row"] for e in r.price_issues["non_finite"]] == [1, 4]
+    assert r.missing_per_column["Close"] == 2
+
+
+# ---------- 10. 境界条件：列構成 ----------
+
+
+def test_boundary_missing_high_low_columns():
+    # High/Low が無くても例外にせず、不足列として記録し、比較は行わない
+    df = make_frame(NORMAL_DATES).drop(columns=["High", "Low"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.missing_columns == ["High", "Low"]
+    assert r.price_issues["high_below_open_close"] == []
+    assert r.price_issues["low_above_open_close"] == []
+    assert r.price_issues["high_below_low"] == []
+
+
+def test_boundary_missing_open_close_columns():
+    df = make_frame(NORMAL_DATES).drop(columns=["Open", "Close"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.missing_columns == ["Open", "Close"]
+    assert r.price_issues["high_below_open_close"] == []
+    assert r.price_issues["low_above_open_close"] == []
+    # 参照する価格が無い場合でも High/Low 自体の検査は行う
+    assert r.anomaly_count == 0
+
+
+def test_boundary_reordered_columns_same_diagnosis():
+    base = diagnose_history(make_frame(NORMAL_DATES), as_of=AS_OF)
+    reordered_df = make_frame(NORMAL_DATES)[["Volume", "Close", "Low", "High", "Open"]]
+    r = diagnose_history(reordered_df, as_of=AS_OF)
+    # 列順は入力どおり記録し、診断結果は変わらない
+    assert r.columns == ["Volume", "Close", "Low", "High", "Open"]
+    assert r.missing_columns == base.missing_columns
+    assert r.missing_per_column == base.missing_per_column
+    assert r.price_issues == base.price_issues
+    assert r.volume_issues == base.volume_issues
+    assert r.anomaly_count == base.anomaly_count
+
+
+def test_boundary_extra_column_ignored_for_diagnosis():
+    df = make_frame(NORMAL_DATES)
+    df["Adj Close"] = [1.0, np.nan, 1.0, 1.0, 1.0]  # 欠損があっても診断対象外
+    r = diagnose_history(df, as_of=AS_OF)
+    assert "Adj Close" in r.columns
+    assert "Adj Close" not in r.missing_per_column
+    assert r.rows_with_missing == 0
+    assert r.anomaly_count == 0
+
+
+def test_boundary_zero_rows_with_columns():
+    df = make_frame(NORMAL_DATES).iloc[0:0]
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.row_count == 0
+    assert r.missing_columns == []
+    assert r.anomaly_count == 0
+    assert r.consecutive_missing_runs == []
+
+
+# ---------- 11. 境界条件：出力の堅牢性 ----------
+
+
+def test_boundary_to_dict_mutation_does_not_affect_report():
+    # to_dict() の戻り値（入れ子を含む）を変更しても、レポート内部の状態や
+    # 次の to_dict() の結果に副作用がないこと
+    dates = ["2024-01-04", "2024-01-05", "2024-01-05", "2024-01-09", "2024-01-10"]
+    df = make_frame(dates, volume=[1000.0, 0.0, 1000.0, 1000.0, 1000.0])
+    r = diagnose_history(df, as_of=AS_OF)
+    before = r.to_dict()
+    assert before["duplicate_row_count"] == 2
+    assert before["warning_count"] == 1
+
+    d = r.to_dict()
+    d["price_issues"]["non_finite"].append(
+        {"row": 99, "date": "x", "column": "Open", "detail": "NaN"}
+    )
+    d["volume_issues"]["zero"].clear()
+    d["duplicate_dates"][0]["count"] = 999
+    d["duplicate_dates"][0]["rows"].append(99)
+    d["out_of_order"].append({"row": 0, "date": "x", "previous_date": "y"})
+    d["future_dates"].append({"row": 0, "date": "2999-01-01"})
+    d["review_gaps"].append({"from_date": "x", "to_date": "y", "skipped_weekdays": 9})
+    d["consecutive_missing_runs"].append({"start_row": 0, "length": 9})
+    d["columns"].append("HACK")
+    d["missing_columns"].append("HACK")
+    d["nat_rows"].append(99)
+    d["missing_per_column"]["Open"] = 999
+
+    after = r.to_dict()
+    assert after == before
+    assert r.price_issues["non_finite"] == []
+    assert r.warning_count == 1
+    assert r.anomaly_count == before["anomaly_count"]
+    assert r.columns == ["Open", "High", "Low", "Close", "Volume"]
+
+
+# ---------- 12. 境界条件：集計定義 ----------
+
+
+def test_boundary_duplicate_row_count_counts_all_involved_rows():
+    # duplicate_row_count は「重複に関係する全行数」（出現回数の合計）。
+    # 「余分な重複行数」（出現回数−1 の合計）ではない
+    dates = ["2024-01-04", "2024-01-05", "2024-01-05", "2024-01-05", "2024-01-08"]
+    r = diagnose_history(make_frame(dates), as_of=AS_OF)
+    assert r.duplicate_dates[0]["count"] == 3
+    assert r.duplicate_row_count == 3  # 余分な行数なら 2 になる
+
+
+def test_boundary_duplicate_row_count_multiple_groups():
+    dates = ["2024-01-04", "2024-01-04", "2024-01-08", "2024-01-08", "2024-01-08"]
+    r = diagnose_history(make_frame(dates), as_of=AS_OF)
+    assert [d["count"] for d in r.duplicate_dates] == [2, 3]
+    assert r.duplicate_row_count == 5  # 2 + 3（余分な行数なら 3）
