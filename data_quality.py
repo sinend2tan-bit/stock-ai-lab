@@ -12,10 +12,17 @@
 - 未来日付の判定基準は、呼び出し側が as_of（基準日）か market（市場の
   タイムゾーン指定）のどちらかを必ず明示する。実行環境のローカル日付で
   既定判定はしない（市場現地日付とずれるため）。
+- 入力契約は「単一銘柄の OHLCV」である。列名の重複（複数銘柄の
+  MultiIndex を先頭レベルだけ平坦化した場合など）は列の特定が曖昧に
+  なるため契約外とし、diagnose_history は ValueError にする。
+- duplicate_row_count は「重複日付に関係する全行数」（各重複日付の
+  出現回数の合計）であり、「余分な重複行数」（出現回数−1 の合計）
+  ではない。
 """
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -64,7 +71,7 @@ class DataQualityReport:
     nat_count: int = 0
     nat_rows: list = field(default_factory=list)
     duplicate_dates: list = field(default_factory=list)  # {date, count, rows}
-    duplicate_row_count: int = 0
+    duplicate_row_count: int = 0  # 重複日付に関係する全行数（出現回数の合計。余分な行数ではない）
     monotonic_increasing: bool = True
     out_of_order: list = field(default_factory=list)  # {row, date, previous_date}
     future_dates: list = field(default_factory=list)  # {row, date}
@@ -107,6 +114,8 @@ class DataQualityReport:
         return self.anomaly_count > 0
 
     def to_dict(self) -> dict:
+        """辞書化する。入れ子のリスト・辞書は複製して返すため、戻り値を
+        変更してもレポート内部の状態には影響しない。"""
         return {
             "row_count": self.row_count,
             "columns": list(self.columns),
@@ -114,20 +123,20 @@ class DataQualityReport:
             "index_is_datetime": self.index_is_datetime,
             "nat_count": self.nat_count,
             "nat_rows": list(self.nat_rows),
-            "duplicate_dates": self.duplicate_dates,
+            "duplicate_dates": copy.deepcopy(self.duplicate_dates),
             "duplicate_row_count": self.duplicate_row_count,
             "monotonic_increasing": self.monotonic_increasing,
-            "out_of_order": self.out_of_order,
-            "future_dates": self.future_dates,
-            "review_gaps": self.review_gaps,
-            "price_issues": self.price_issues,
-            "volume_issues": self.volume_issues,
+            "out_of_order": copy.deepcopy(self.out_of_order),
+            "future_dates": copy.deepcopy(self.future_dates),
+            "review_gaps": copy.deepcopy(self.review_gaps),
+            "price_issues": copy.deepcopy(self.price_issues),
+            "volume_issues": copy.deepcopy(self.volume_issues),
             "missing_per_column": dict(self.missing_per_column),
             "rows_with_missing": self.rows_with_missing,
             "rows_dropped_by_dropna": self.rows_dropped_by_dropna,
             "row_count_after_dropna": self.row_count_after_dropna,
             "last_row_missing": self.last_row_missing,
-            "consecutive_missing_runs": self.consecutive_missing_runs,
+            "consecutive_missing_runs": copy.deepcopy(self.consecutive_missing_runs),
             "anomaly_count": self.anomaly_count,
             "warning_count": self.warning_count,
             "review_count": self.review_count,
@@ -184,6 +193,7 @@ def diagnose_history(
 
     引数:
         df: 日付インデックスと OHLCV 列を持つDataFrame（整形前・整形後どちらでも可）。
+            単一銘柄が前提で、列名が重複している場合は ValueError になる。
         as_of: 未来日付の判定基準日。指定した場合はこれを優先する。
         market: as_of が無い場合に、市場現地日付を求めるための市場（"JP" / "US"）。
             as_of と market のどちらも指定しない場合は ValueError になる
@@ -203,6 +213,15 @@ def diagnose_history(
     view = df.copy()
     if isinstance(view.columns, pd.MultiIndex):
         view.columns = view.columns.get_level_values(0)
+    # 入力契約は単一銘柄の OHLCV。列名が重複していると列の特定が曖昧に
+    # なる（複数銘柄の MultiIndex を平坦化した場合など）ため、契約外として
+    # 明示的にエラーにする（黙って誤診断しない）。
+    if view.columns.duplicated().any():
+        dupes = sorted({str(c) for c in view.columns[view.columns.duplicated()]})
+        raise ValueError(
+            "入力は単一銘柄のOHLCVが前提です。重複した列名があります: "
+            + ", ".join(dupes)
+        )
     report.row_count = len(view)
     report.columns = [str(c) for c in view.columns]
     present = [c for c in required_columns if c in view.columns]
