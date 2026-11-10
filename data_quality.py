@@ -18,6 +18,8 @@
 - duplicate_row_count は「重複日付に関係する全行数」（各重複日付の
   出現回数の合計）であり、「余分な重複行数」（出現回数−1 の合計）
   ではない。
+- anomaly_count には必須列の欠落数（len(missing_columns)）も含める。
+  必須列が欠けた入力は構造が不完全であり、異常として数える。
 """
 
 from __future__ import annotations
@@ -91,7 +93,8 @@ class DataQualityReport:
     @property
     def anomaly_count(self) -> int:
         total = (
-            self.nat_count
+            len(self.missing_columns)
+            + self.nat_count
             + self.duplicate_row_count
             + len(self.out_of_order)
             + len(self.future_dates)

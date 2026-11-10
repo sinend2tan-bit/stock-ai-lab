@@ -373,15 +373,27 @@ def test_missing_column_absent_reported():
     assert r.missing_columns == ["Volume"]
     assert r.volume_issues == {"zero": [], "negative": [], "non_finite": []}
     assert r.row_count == 5
+    # 必須列の欠落は異常件数にも反映される（欠落1列 = 異常1件）
+    assert r.anomaly_count == 1
+    assert r.has_anomalies is True
+    assert r.to_dict()["anomaly_count"] == 1
 
 
 def test_empty_and_none_input():
     r = diagnose_history(pd.DataFrame(), as_of=AS_OF)
     assert r.row_count == 0
     assert set(r.missing_columns) == {"Open", "High", "Low", "Close", "Volume"}
-    assert r.anomaly_count == 0
+    # 空DataFrameは必須5列すべてが欠落するため、異常件数は5
+    assert r.anomaly_count == 5
+    assert r.has_anomalies is True
+    assert r.to_dict()["anomaly_count"] == 5
     r_none = diagnose_history(None, as_of=AS_OF)
     assert r_none.row_count == 0
+    # None も必須5列すべてが欠落したものとして異常件数に反映される
+    assert set(r_none.missing_columns) == {"Open", "High", "Low", "Close", "Volume"}
+    assert r_none.anomaly_count == 5
+    assert r_none.has_anomalies is True
+    assert r_none.to_dict()["anomaly_count"] == 5
 
 
 # ---------- 5. 一括/個別経路の整形一致 ----------
@@ -713,6 +725,9 @@ def test_boundary_missing_high_low_columns():
     df = make_frame(NORMAL_DATES).drop(columns=["High", "Low"])
     r = diagnose_history(df, as_of=AS_OF)
     assert r.missing_columns == ["High", "Low"]
+    # 必須列の欠落2列は異常件数にも2件として反映される
+    assert r.anomaly_count == 2
+    assert r.has_anomalies is True
     assert r.price_issues["high_below_open_close"] == []
     assert r.price_issues["low_above_open_close"] == []
     assert r.price_issues["high_below_low"] == []
@@ -724,8 +739,11 @@ def test_boundary_missing_open_close_columns():
     assert r.missing_columns == ["Open", "Close"]
     assert r.price_issues["high_below_open_close"] == []
     assert r.price_issues["low_above_open_close"] == []
-    # 参照する価格が無い場合でも High/Low 自体の検査は行う
-    assert r.anomaly_count == 0
+    # 参照する価格が無い場合でも High/Low 自体の検査は行う（ここでは問題なし）。
+    # 異常件数は必須列の欠落2列分のみで、価格検査由来の異常は加わらない
+    assert r.anomaly_count == 2
+    assert r.has_anomalies is True
+    assert r.to_dict()["anomaly_count"] == 2
 
 
 def test_boundary_reordered_columns_same_diagnosis():
@@ -756,7 +774,10 @@ def test_boundary_zero_rows_with_columns():
     r = diagnose_history(df, as_of=AS_OF)
     assert r.row_count == 0
     assert r.missing_columns == []
+    # 必須列が全て揃った0行DataFrameは欠落がないため異常件数は0のまま
     assert r.anomaly_count == 0
+    assert r.has_anomalies is False
+    assert r.to_dict()["anomaly_count"] == 0
     assert r.consecutive_missing_runs == []
 
 
@@ -814,3 +835,29 @@ def test_boundary_duplicate_row_count_multiple_groups():
     r = diagnose_history(make_frame(dates), as_of=AS_OF)
     assert [d["count"] for d in r.duplicate_dates] == [2, 3]
     assert r.duplicate_row_count == 5  # 2 + 3（余分な行数なら 3）
+
+
+# ---------- 13. 集計定義：必須列欠落の異常件数への反映 ----------
+
+
+def test_missing_columns_added_to_anomaly_count():
+    # anomaly_count には必須列の欠落数（len(missing_columns)）が加算され、
+    # 他の異常とは合算される。has_anomalies と to_dict() も整合する
+    dates = ["2024-01-04", "2024-01-05", "2024-01-05", "2024-01-09", "2024-01-10"]
+    df = make_frame(dates).drop(columns=["Volume"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.missing_columns == ["Volume"]
+    assert r.duplicate_row_count == 2
+    # 欠落1列 + 重複日付に関係する2行 = 3
+    assert r.anomaly_count == 3
+    assert r.has_anomalies is True
+    assert r.to_dict()["anomaly_count"] == 3
+
+
+def test_no_missing_columns_keeps_anomaly_count_zero():
+    # 必須列が全て揃った通常入力では、欠落由来の加算はなく異常件数は0
+    r = diagnose_history(make_frame(NORMAL_DATES), as_of=AS_OF)
+    assert r.missing_columns == []
+    assert r.anomaly_count == 0
+    assert r.has_anomalies is False
+    assert r.to_dict()["anomaly_count"] == 0
