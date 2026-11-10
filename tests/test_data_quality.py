@@ -861,3 +861,127 @@ def test_no_missing_columns_keeps_anomaly_count_zero():
     assert r.anomaly_count == 0
     assert r.has_anomalies is False
     assert r.to_dict()["anomaly_count"] == 0
+
+
+# ---------- 14. 必須列のカスタム指定（required_columns 引数の契約） ----------
+
+
+def test_required_columns_custom_subset_only_specified_are_required():
+    # 標準OHLCV以外の列構成でも、指定した列だけが必須列として扱われる。
+    # Close と Volume だけの入力を required_columns=("Close", "Volume") で
+    # 診断すると、Open/High/Low は欠落に数えない
+    df = make_frame(NORMAL_DATES)[["Close", "Volume"]]
+    r = diagnose_history(df, as_of=AS_OF, required_columns=("Close", "Volume"))
+    assert r.missing_columns == []
+    assert r.anomaly_count == 0
+    assert r.has_anomalies is False
+    # 同じ入力を既定（OHLCV 5列）で診断すると、欠けている3列が必須列欠落になる
+    r_default = diagnose_history(df, as_of=AS_OF)
+    assert r_default.missing_columns == ["Open", "High", "Low"]
+    assert r_default.anomaly_count == 3
+
+
+def test_required_columns_custom_non_ohlcv_name_missing():
+    # 標準OHLCVに無い列名を指定し、入力に無ければ欠落として記録され、
+    # missing_columns / anomaly_count / has_anomalies / to_dict() が整合する
+    r = diagnose_history(
+        make_frame(NORMAL_DATES),
+        as_of=AS_OF,
+        required_columns=("Open", "Close", "Adj Close"),
+    )
+    assert r.missing_columns == ["Adj Close"]
+    assert r.anomaly_count == 1
+    assert r.has_anomalies is True
+    d = r.to_dict()
+    assert d["missing_columns"] == ["Adj Close"]
+    assert d["anomaly_count"] == 1
+    # 欠落した必須列は入力に存在しないため、欠損集計の対象にはならない
+    assert set(r.missing_per_column) == {"Open", "Close"}
+
+
+def test_required_columns_missing_order_follows_argument():
+    # missing_columns は required_columns で指定した順序で記録される
+    df = make_frame(NORMAL_DATES).drop(columns=["Open", "Volume"])
+    r = diagnose_history(df, as_of=AS_OF, required_columns=("Volume", "Open"))
+    assert r.missing_columns == ["Volume", "Open"]
+    assert r.anomaly_count == 2
+    assert r.has_anomalies is True
+    assert r.to_dict()["missing_columns"] == ["Volume", "Open"]
+
+
+def test_required_columns_missing_aggregation_scoped_to_present_required():
+    # 欠損行数／dropna相当の集計は「指定した必須列のうち入力に存在する列」
+    # だけが対象になる。指定外の列の欠損は集計に入らない
+    dates = [
+        "2024-01-04", "2024-01-05", "2024-01-08",
+        "2024-01-09", "2024-01-10", "2024-01-11",
+    ]
+    df = make_frame(
+        dates,
+        close=[100.0, np.nan, 100.0, 100.0, 100.0, 100.0],
+        volume=[1000.0, 1000.0, np.nan, 1000.0, 1000.0, 1000.0],
+    )
+    # Close だけを必須にすると、Volume の欠損行は集計に入らない
+    r_close = diagnose_history(df, as_of=AS_OF, required_columns=("Close",))
+    assert r_close.missing_per_column == {"Close": 1}
+    assert r_close.rows_with_missing == 1
+    assert r_close.rows_dropped_by_dropna == 1
+    assert r_close.row_count_after_dropna == 5
+    assert r_close.consecutive_missing_runs == [{"start_row": 1, "length": 1}]
+    # Volume だけを必須にすると、Close の欠損行は集計に入らない
+    r_volume = diagnose_history(df, as_of=AS_OF, required_columns=("Volume",))
+    assert r_volume.missing_per_column == {"Volume": 1}
+    assert r_volume.rows_with_missing == 1
+    assert r_volume.rows_dropped_by_dropna == 1
+    assert r_volume.row_count_after_dropna == 5
+    assert r_volume.consecutive_missing_runs == [{"start_row": 2, "length": 1}]
+    # 両方を必須にすると、欠損行は合算される
+    r_both = diagnose_history(
+        df, as_of=AS_OF, required_columns=("Close", "Volume")
+    )
+    assert r_both.missing_per_column == {"Close": 1, "Volume": 1}
+    assert r_both.rows_with_missing == 2
+    assert r_both.rows_dropped_by_dropna == 2
+    assert r_both.row_count_after_dropna == 4
+    assert r_both.consecutive_missing_runs == [{"start_row": 1, "length": 2}]
+
+
+def test_required_columns_none_and_empty_with_custom():
+    # None・空DataFrameでは、指定した必須列がすべて欠落として記録され、
+    # 異常件数にも反映される
+    r_none = diagnose_history(
+        None, as_of=AS_OF, required_columns=("Close", "Volume")
+    )
+    assert r_none.row_count == 0
+    assert r_none.missing_columns == ["Close", "Volume"]
+    assert r_none.anomaly_count == 2
+    assert r_none.has_anomalies is True
+    assert r_none.to_dict()["anomaly_count"] == 2
+    r_empty = diagnose_history(
+        pd.DataFrame(), as_of=AS_OF, required_columns=("Close",)
+    )
+    assert r_empty.missing_columns == ["Close"]
+    assert r_empty.anomaly_count == 1
+    assert r_empty.has_anomalies is True
+
+
+def test_required_columns_default_matches_explicit_ohlcv():
+    # 既定値（引数省略）は REQUIRED_COLUMNS（OHLCV 5列）と同一であり、
+    # 明示指定しても既存挙動は変わらない。リストで渡しても同じ扱いになる
+    assert data_quality.REQUIRED_COLUMNS == (
+        "Open", "High", "Low", "Close", "Volume"
+    )
+    df = make_frame(
+        NORMAL_DATES, close=[100.0, np.nan, 100.0, 100.0, 100.0]
+    )
+    omitted = diagnose_history(df, as_of=AS_OF).to_dict()
+    explicit = diagnose_history(
+        df, as_of=AS_OF, required_columns=data_quality.REQUIRED_COLUMNS
+    ).to_dict()
+    assert omitted == explicit
+    as_list = diagnose_history(
+        df,
+        as_of=AS_OF,
+        required_columns=["Open", "High", "Low", "Close", "Volume"],
+    ).to_dict()
+    assert as_list == explicit
