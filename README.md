@@ -24,6 +24,7 @@
 - `tests/test_forward_v2.py` : V1・V2並行比較と採用ゲートの単体テスト（ネットワークなしで実行できます）
 - `tests/test_scoring_v2.py` : 新仕様（V2）方向判定の単体テスト（ネットワークなしで実行できます）
 - `tests/test_verification_a.py` : 検証Aの単体テスト（ネットワークなしで実行できます）
+- `tests/test_run_verification_a.py` : 検証Aの実行入口（run_verification_a.py）の単体テスト（ネットワークなしで実行できます）
 - `tests/test_app_smoke.py` : アプリ画面のスモークテスト（ネットワークなしで実行できます）
 - `tests/manual_live_fetch_check.py` : 実データ取得の手動確認スクリプト（単体テストには含まれません）
 - `.gitignore` : 不要ファイル除外
