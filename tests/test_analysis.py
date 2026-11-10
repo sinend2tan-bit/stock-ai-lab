@@ -257,3 +257,118 @@ def test_select_label_with_name():
 
 def test_select_label_without_name():
     assert analysis.select_label("9999.T") == "9999.T"
+
+
+# ---- fetch_history_bundle（取得直後 raw と分析用 clean の分離） ----
+
+
+def _frame_with_nan_row():
+    frame = make_frame([100.0] * 40)
+    frame.iloc[5, frame.columns.get_loc("Close")] = np.nan
+    return frame
+
+
+def test_bundle_keeps_missing_rows_in_raw_and_drops_in_clean(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = _frame_with_nan_row()
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    assert err is None
+    # raw は欠損行を保持し、clean は従来どおり欠損行を除外する
+    assert len(raw) == 40
+    assert pd.isna(raw["Close"].iloc[5])
+    assert len(clean) == 39
+    assert clean.index.equals(source.index.delete(5))
+    pd.testing.assert_frame_equal(clean, source.dropna())
+
+
+def test_bundle_clean_matches_fetch_history(monkeypatch):
+    # 後方互換：fetch_history の戻りは bundle の clean と一致する
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = _frame_with_nan_row()
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+    _, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    df, err2 = analysis.fetch_history("7203.T", period="1y")
+    assert err is None and err2 is None
+    pd.testing.assert_frame_equal(df, clean)
+
+
+def test_bundle_does_not_mutate_downloaded_frame(monkeypatch):
+    # yfinance の戻り値（MultiIndex列）は変更しない
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    base = _frame_with_nan_row()
+    multi = base.copy()
+    multi.columns = pd.MultiIndex.from_product([base.columns, ["7203.T"]])
+    snapshot = multi.copy(deep=True)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: multi)
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    assert err is None
+    pd.testing.assert_frame_equal(multi, snapshot)
+    assert list(raw.columns) == analysis.NEEDED_COLUMNS
+    assert len(raw) == 40 and len(clean) == 39
+
+
+def test_bundle_missing_columns_returns_raw_and_error(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = make_frame([100.0] * 40).drop(columns=["Volume"])
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    assert err is not None and "必要な列" in err
+    assert clean.empty
+    # 必要列欠落でも raw は診断用に返る（存在する列のみ・行は保持）
+    assert len(raw) == 40
+    assert "Volume" not in raw.columns
+    # fetch_history 側は従来どおり空＋同じ理由
+    df, err2 = analysis.fetch_history("7203.T", period="1y")
+    assert df.empty and err2 == err
+
+
+def test_bundle_all_missing_rows_returns_raw_and_error(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = make_frame([100.0] * 40)
+    source["Close"] = np.nan
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    assert err is not None and "欠損のみ" in err
+    assert clean.empty
+    assert len(raw) == 40
+
+
+def test_bundle_download_error_returns_empties(monkeypatch):
+    def boom(*args, **kwargs):
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    monkeypatch.setattr(analysis.yf, "download", boom)
+    raw, clean, err = analysis.fetch_history_bundle("AAPL", period="1y")
+    assert raw.empty and clean.empty
+    assert err is not None and "エラー" in err
+
+
+def test_bundle_empty_result_returns_empties(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: pd.DataFrame())
+    raw, clean, err = analysis.fetch_history_bundle("INVALIDXYZ123", period="1y")
+    assert raw.empty and clean.empty and err is not None
+
+
+def test_diagnosis_does_not_change_scores_or_raw(monkeypatch):
+    # raw の診断（異常・警告あり）を行っても、clean のスコアは変わらず、
+    # 診断は raw 自体も変更しない（スコアへの伝播なし・非破壊）
+    import data_quality
+
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = make_frame([100.0 + i for i in range(120)])
+    source.iloc[10, source.columns.get_loc("Volume")] = 0.0  # 警告候補
+    source.iloc[20, source.columns.get_loc("High")] = 1.0  # 異常候補（High < Close 等）
+    snapshot = source.copy(deep=True)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+    assert err is None
+    before = analysis.assess_all(analysis.add_indicators(clean))
+    report = data_quality.diagnose_history(raw, market="JP")
+    assert report.anomaly_count > 0 and report.warning_count > 0
+    after = analysis.assess_all(analysis.add_indicators(clean))
+    assert before == after
+    pd.testing.assert_frame_equal(raw, snapshot)
+    pd.testing.assert_frame_equal(source, snapshot)
