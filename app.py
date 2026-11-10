@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 import analysis
+import data_quality
 import forward
 import scan
 import scoring_v2
@@ -88,6 +89,16 @@ def get_history(symbol, period):
     return analysis.fetch_history(symbol, period)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def get_history_bundle(symbol, period):
+    """取得直後データ（raw）と分析用データ（clean）を15分キャッシュする。
+
+    個別分析タブ専用。raw は品質診断、clean は指標計算・チャート・スコアに使う。
+    1銘柄・1期間あたりの外部データ取得は、この1回だけにする。
+    """
+    return analysis.fetch_history_bundle(symbol, period)
+
+
 if refresh:
     st.cache_data.clear()
 
@@ -104,6 +115,108 @@ def show_freshness(df, symbol):
         st.success(fresh["message"])
     st.caption(fresh["note"])
     return fresh
+
+
+# 診断詳細の表示名（data_quality の項目キーに対応する読みやすい表記）
+_PRICE_ISSUE_LABELS = {
+    "non_finite": "価格の非有限値（NaN・inf）",
+    "non_positive": "価格が0以下",
+    "high_below_open_close": "高値が始値・終値より低い",
+    "low_above_open_close": "安値が始値・終値より高い",
+    "high_below_low": "高値が安値より低い",
+}
+_VOLUME_ISSUE_LABELS = {
+    "zero": "出来高ゼロ（警告候補）",
+    "negative": "出来高の負値",
+    "non_finite": "出来高の非有限値（NaN・inf）",
+}
+
+
+def show_data_quality(raw, symbol):
+    """取得直後データ（raw）の品質診断を、読み取り専用で表示する。
+
+    診断は品質情報の表示だけに使い、スコア・ランキング・銘柄選定には
+    一切使わない。診断できない場合は正常扱いにせず「診断不能」と表示する。
+    日付間隔は休場等の可能性があるため「要確認」とし、異常とは断定しない。
+    """
+    st.markdown("**データ品質診断（取得直後データ）**")
+    st.caption(
+        "診断はデータ品質の参考情報であり、売買シグナルではありません。"
+        "診断による自動除外・補正は行いません。診断結果でスコアやランキングは変えません。"
+        "診断で問題がなくても、データの正確性を保証するものではありません。"
+    )
+    try:
+        report = data_quality.diagnose_history(
+            raw, market=analysis.market_of(symbol)
+        ).to_dict()
+    except Exception as exc:
+        st.warning(
+            "品質診断を実施できませんでした（診断不能："
+            f"{type(exc).__name__}: {str(exc)[:120]}）。"
+            "診断不能を正常とは扱いません。分析結果は従来どおり表示します。"
+        )
+        return
+    st.write(
+        f"取得本数：{report['row_count']}本 / "
+        f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
+        f"異常候補：{report['anomaly_count']}件 / "
+        f"警告候補：{report['warning_count']}件 / "
+        f"日付間隔の要確認：{report['review_count']}件"
+    )
+    if report["anomaly_count"] > 0:
+        st.warning(
+            f"異常候補が {report['anomaly_count']} 件あります。"
+            "詳細を確認し、このデータによる分析は慎重に扱ってください。"
+        )
+    elif report["warning_count"] > 0 or report["review_count"] > 0:
+        st.info("異常候補はありませんが、警告候補・要確認があります。詳細を確認してください。")
+    else:
+        st.success("異常候補・警告候補・要確認はありませんでした。")
+    with st.expander("診断の詳細"):
+        if report["missing_columns"]:
+            st.write("• 必須列の欠落：" + "、".join(report["missing_columns"]))
+        if report["nat_count"]:
+            st.write(f"• 日付として解釈できない行：{report['nat_count']}件")
+        for dup in report["duplicate_dates"]:
+            st.write(f"• 重複日付：{dup['date']}（{dup['count']}行）")
+        for item in report["out_of_order"]:
+            st.write(
+                f"• 日付順序違反：{item['date']}（直前の有効日付 {item['previous_date']} より前）"
+            )
+        for item in report["future_dates"]:
+            st.write(f"• 未来日付：{item['date']}")
+        for kind, label in _PRICE_ISSUE_LABELS.items():
+            for item in report["price_issues"].get(kind, []):
+                st.write(f"• 価格の整合性（{label}）：{item['date']} {item['column']} {item['detail']}")
+        for kind, label in _VOLUME_ISSUE_LABELS.items():
+            for item in report["volume_issues"].get(kind, []):
+                st.write(f"• 出来高（{label}）：{item['date']} {item['detail']}")
+        missing_cols = [
+            f"{col} {count}件"
+            for col, count in report["missing_per_column"].items()
+            if count
+        ]
+        if missing_cols:
+            st.write("• 列ごとの欠損：" + "、".join(missing_cols))
+        for run in report["consecutive_missing_runs"]:
+            st.write(
+                f"• 欠損の連続：{run['start_row']}行目から{run['length']}行"
+            )
+        if report["last_row_missing"]:
+            st.write("• 最新行に欠損があります")
+        for gap in report["review_gaps"]:
+            st.write(
+                f"• 日付間隔の要確認：{gap['from_date']} → {gap['to_date']}"
+                f"（平日 {gap['skipped_weekdays']} 日分）。"
+                "週末・祝日・臨時休場の可能性があり、異常とは断定しません。"
+            )
+        if (
+            report["anomaly_count"] == 0
+            and report["warning_count"] == 0
+            and report["review_count"] == 0
+            and not report["missing_columns"]
+        ):
+            st.write("詳細に表示する項目はありません。")
 
 
 def _regime_at(indicators, base_date):
@@ -207,13 +320,17 @@ with tab_detail:
         st.info("左側に銘柄コードを入力してください。")
     else:
         st.markdown(f"**対象銘柄：{analysis.display_label(selected_symbol, company_name(selected_symbol))}**")
-        raw, err = get_history(selected_symbol, period)
-        if err is not None or raw.empty:
-            st.error("データを取得できませんでした。" + (err or ""))
+        raw_hist, clean_hist, err = get_history_bundle(selected_symbol, period)
+        if err is not None:
+            st.error("データを取得できませんでした。" + err)
             st.write("銘柄コードを確認するか、時間をおいて「データを取得・更新」を押してください。取得できない場合は、その旨を表示するだけで、有料データへは切り替えません。")
+            if not raw_hist.empty:
+                st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
+                show_data_quality(raw_hist, selected_symbol)
         else:
-            df = analysis.add_indicators(raw)
+            df = analysis.add_indicators(clean_hist)
             show_freshness(df, selected_symbol)
+            show_data_quality(raw_hist, selected_symbol)
             latest = df.iloc[-1]
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")

@@ -67,14 +67,13 @@ def select_label(symbol, name=""):
 FETCH_RETRY_WAIT_SECONDS = 3.0
 
 
-def fetch_history(symbol, period="2y"):
-    """株価の日足を取得する。
+def _download_history(symbol, period):
+    """yf.download を再試行付きで呼ぶ。(df, last_error) を返す。
 
-    戻り値: (DataFrame, error_message)
-    成功時は (データ, None)、失敗時は (空のDataFrame, 理由の説明)。
-    例外は外に出さず、画面全体が止まらないようにする。
     通信エラーや空の結果の場合は、短い間隔を置いて1回だけ再試行する
     （一時的な取得制限への対策。再試行は最大で合計2回まで）。
+    取得できた場合は (df, None)、例外が続いた場合は (None, 理由)。
+    空の結果が続いた場合は (空のDataFrame, None) で、呼び出し側が扱う。
     """
     import time
 
@@ -93,21 +92,68 @@ def fetch_history(symbol, period="2y"):
             break
         if attempt == 0:
             time.sleep(FETCH_RETRY_WAIT_SECONDS)
-    if last_error is not None:
-        return pd.DataFrame(), last_error
-    if df is None or df.empty:
-        return pd.DataFrame(), "データが取得できませんでした。銘柄コードの誤り、または提供側でデータがない可能性があります。"
+    return df, last_error
+
+
+def _split_raw_clean(df):
+    """取得直後データから (raw, clean, error) を作る。引数の df は変更しない。
+
+    - raw: 必要列をそろえた取得直後データ。欠損行を保持する（品質診断用）。
+    - clean: raw に従来どおり dropna() を適用した分析用データ。
+    - 必要列が欠けている場合は (raw, 空, 理由)。raw には、存在する
+      必要列だけが入る（欠けた列は診断で「必須列欠落」として見える）。
+    - clean が空（欠損のみ）の場合は (raw, 空, 理由)。
+    - 整形で例外が起きた場合は (空, 空, 理由)。
+    """
     try:
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        if not all(c in df.columns for c in NEEDED_COLUMNS):
-            return pd.DataFrame(), "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
-        df = df[NEEDED_COLUMNS].dropna().copy()
+        work = df.copy()
+        if isinstance(work.columns, pd.MultiIndex):
+            work.columns = work.columns.get_level_values(0)
+        present = [c for c in NEEDED_COLUMNS if c in work.columns]
+        raw = work[present].copy()
+        if len(present) < len(NEEDED_COLUMNS):
+            return raw, pd.DataFrame(), "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
+        clean = raw.dropna().copy()
     except Exception as exc:
-        return pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
-    if df.empty:
-        return pd.DataFrame(), "取得したデータが空でした（欠損のみ）。"
-    return df, None
+        return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
+    if clean.empty:
+        return raw, pd.DataFrame(), "取得したデータが空でした（欠損のみ）。"
+    return raw, clean, None
+
+
+def fetch_history_bundle(symbol, period="2y"):
+    """株価の日足を、取得直後（raw）と分析用（clean）に分けて取得する。
+
+    戻り値: (raw, clean, error_message)
+    - 成功時は (raw, clean, None)。raw は欠損行を保持し、clean は
+      従来の fetch_history() と同じ dropna() 済みデータ。
+    - 取得失敗時は (空, 空, 理由)。
+    - 必要列欠落、または欠損のみで clean が作れない場合は (raw, 空, 理由)。
+      raw は品質診断に使えるため、呼び出し側で診断結果と分析不可を
+      あわせて表示できる。
+    例外は外に出さず、画面全体が止まらないようにする。
+    """
+    df, last_error = _download_history(symbol, period)
+    if last_error is not None:
+        return pd.DataFrame(), pd.DataFrame(), last_error
+    if df is None or df.empty:
+        return pd.DataFrame(), pd.DataFrame(), "データが取得できませんでした。銘柄コードの誤り、または提供側でデータがない可能性があります。"
+    return _split_raw_clean(df)
+
+
+def fetch_history(symbol, period="2y"):
+    """株価の日足を取得する。
+
+    戻り値: (DataFrame, error_message)
+    成功時は (データ, None)、失敗時は (空のDataFrame, 理由の説明)。
+    例外は外に出さず、画面全体が止まらないようにする。
+    通信エラーや空の結果の場合は、短い間隔を置いて1回だけ再試行する
+    （一時的な取得制限への対策。再試行は最大で合計2回まで）。
+    """
+    _, clean, error = fetch_history_bundle(symbol, period)
+    if error is not None:
+        return pd.DataFrame(), error
+    return clean, None
 
 
 def add_indicators(df):
