@@ -21,6 +21,7 @@ import pandas as pd
 import yfinance as yf
 
 import analysis
+import data_quality
 
 SCAN_PERIOD = "2y"
 CHUNK_SIZE = 25
@@ -171,6 +172,24 @@ def _score_key(row):
     return (-val(row["中期スコア"]), -val(row["長期スコア"]), -val(row["短期スコア"]), row["コード"])
 
 
+def _data_quality_warnings(df, symbol):
+    """スキャン用のデータ品質警告を作る。診断結果は表示だけに使う。"""
+    try:
+        report = data_quality.diagnose_history(
+            df, market=analysis.market_of(symbol)
+        )
+    except Exception as exc:
+        return [f"データ品質診断不能（{type(exc).__name__}）"]
+    warnings = []
+    if report.anomaly_count:
+        warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
+    if report.warning_count:
+        warnings.append(f"出来高ゼロの警告候補 {report.warning_count}件")
+    if report.review_count:
+        warnings.append(f"日付間隔の要確認 {report.review_count}件")
+    return warnings
+
+
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
     """スキャンを実行する。
 
@@ -201,6 +220,7 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             base["警告・理由"] = f"取得失敗：{err or 'データなし'}"
             excluded.append(base)
         else:
+            quality_warnings = _data_quality_warnings(raw, symbol)
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
@@ -216,19 +236,27 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             base["長期ラベル"] = results["長期"]["label"]
             if not mid["available"]:
                 base["区分"] = "参考外"
-                base["警告・理由"] = "中期評価ができません（データ不足）：" + " ".join(mid["reasons"])
+                reasons = ["中期評価ができません（データ不足）：" + " ".join(mid["reasons"])]
+                reasons.extend(quality_warnings)
+                base["警告・理由"] = " / ".join(reasons)
                 excluded.append(base)
             elif fresh["status"] in ("stale", "no_data"):
                 # 「古い可能性」のデータはランキングの信頼性を損なうため参考外にする。
                 # 「間隔あり（check）」は週末・休場で通常に起こるため、警告を付けて
                 # ランキングに入れる（freshのみに絞ると週末に全銘柄が消えてしまう）。
                 base["区分"] = "参考外"
-                base["警告・理由"] = f"データが古い可能性があります：{fresh['message']}"
+                reasons = [f"データが古い可能性があります：{fresh['message']}"]
+                reasons.extend(quality_warnings)
+                base["警告・理由"] = " / ".join(reasons)
                 excluded.append(base)
             else:
                 base["区分"] = "ランキング"
                 base["選定理由"] = " / ".join(mid["reasons"])
-                warnings = list(mid["warnings"]) + list(results["短期"]["warnings"])
+                warnings = (
+                    list(mid["warnings"])
+                    + list(results["短期"]["warnings"])
+                    + quality_warnings
+                )
                 if fresh["status"] == "check":
                     warnings.append("データ最終日から間隔があります（週末・休場の可能性）")
                 base["警告・理由"] = " / ".join(warnings)
