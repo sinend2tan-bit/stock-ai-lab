@@ -219,3 +219,62 @@ def test_scan_csv_contains_both_sections():
     first_line = text.splitlines()[0]
     for col in ["コード", "会社名", "中期スコア", "選定理由", "データ最終日", "取得日時"]:
         assert col in first_line
+
+
+# --- 欠損行の除外数（表示専用） ---
+
+def test_scan_shape_preserves_missing_row_drop_count():
+    frame = rising()
+    frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
+    snapshot = frame.copy(deep=True)
+
+    shaped = scan._shape(frame)
+
+    assert len(shaped) == len(frame) - 1
+    assert shaped.attrs["rows_dropped_by_dropna"] == 1
+    assert shaped.attrs["raw_row_count"] == len(frame)
+    pd.testing.assert_frame_equal(frame, snapshot)
+
+
+def test_scan_displays_missing_row_drop_count_without_changing_score():
+    frame = rising()
+    frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
+    shaped = scan._shape(frame)
+    universe = [("MISSING.T", "欠損確認社", "テスト")]
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda symbols: {"MISSING.T": (shaped, None)},
+        lambda symbol: (shaped, None),
+        run_at="missing-row-warning-test",
+    )
+    baseline, _, _ = scan.run_scan(
+        universe,
+        lambda symbols: {"MISSING.T": (frame.dropna().copy(), None)},
+        lambda symbol: (frame.dropna().copy(), None),
+        run_at="missing-row-baseline-test",
+    )
+
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert ranked[0]["中期スコア"] == baseline[0]["中期スコア"]
+    assert ranked[0]["短期スコア"] == baseline[0]["短期スコア"]
+    assert ranked[0]["長期スコア"] == baseline[0]["長期スコア"]
+
+
+def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
+    frame = rising()
+    frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
+    _, clean, error = scan.analysis._split_raw_clean(frame)
+    assert error is None
+    universe = [("FALLBACK.T", "個別取得確認社", "テスト")]
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda symbols: {"FALLBACK.T": (pd.DataFrame(), "batch unavailable")},
+        lambda symbol: (clean, None),
+        run_at="missing-row-fallback-test",
+    )
+
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]

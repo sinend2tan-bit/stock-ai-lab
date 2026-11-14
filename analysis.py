@@ -149,6 +149,10 @@ def _split_raw_clean(df):
         if len(present) < len(NEEDED_COLUMNS):
             return raw, pd.DataFrame(), "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
         clean = raw.dropna().copy()
+        # Keep the legacy analysis rows unchanged while carrying the number of
+        # rows omitted by dropna for read-only scan diagnostics.
+        clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
+        clean.attrs["raw_row_count"] = len(raw)
     except Exception as exc:
         return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
     if clean.empty:
