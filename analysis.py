@@ -521,7 +521,7 @@ def freshness_check(df, symbol, today=None):
     if trading_age is None:
         note = (
             "対象年の公式休業日カレンダーが未登録のため、暦日による"
-            "保守的な暫定判定に戻しています。未確認のため fresh には格上げしません。"
+            "保守的な暫定判定に戻しています。営業日カレンダーではなく、従来の暦日基準をそのまま適用しています。"
         )
         if age <= 1:
             status = "fresh"
