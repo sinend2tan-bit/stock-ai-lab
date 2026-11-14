@@ -121,7 +121,13 @@ def _shape(df):
             out.columns = out.columns.get_level_values(0)
         if not all(c in out.columns for c in analysis.NEEDED_COLUMNS):
             return pd.DataFrame()
-        return out[analysis.NEEDED_COLUMNS].dropna().copy()
+        raw = out[analysis.NEEDED_COLUMNS].copy()
+        clean = raw.dropna().copy()
+        # Preserve a display-only count; the cleaned values and row order stay
+        # exactly the same as the previous dropna() result.
+        clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
+        clean.attrs["raw_row_count"] = len(raw)
+        return clean
     except Exception:
         return pd.DataFrame()
 
@@ -181,6 +187,9 @@ def _data_quality_warnings(df, symbol):
     except Exception as exc:
         return [f"データ品質診断不能（{type(exc).__name__}）"]
     warnings = []
+    dropped_rows = int(df.attrs.get("rows_dropped_by_dropna", 0) or 0)
+    if dropped_rows:
+        warnings.append(f"欠損行の除外 {dropped_rows}行（分析対象外）")
     if report.anomaly_count:
         warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
     if report.warning_count:
