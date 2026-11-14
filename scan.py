@@ -182,8 +182,11 @@ def _score_key(row):
 def _data_quality_warnings(df, symbol):
     """スキャン用のデータ品質警告を作る。診断結果は表示だけに使う。"""
     try:
+        market = analysis.market_of(symbol)
         report = data_quality.diagnose_history(
-            df, market=analysis.market_of(symbol)
+            df,
+            market=market,
+            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         )
     except Exception as exc:
         return [f"データ品質診断不能（{type(exc).__name__}）"]
