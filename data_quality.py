@@ -55,7 +55,8 @@ def _date_label(parsed_ts, raw_label) -> str:
 
 
 def _naive(ts: pd.Timestamp) -> pd.Timestamp:
-    """タイムゾーン付きTimestampを比較用にnaiveへ変換する。"""
+    """Timestamp / datetime を比較用のnaive Timestampへ変換する。"""
+    ts = pd.Timestamp(ts)
     if ts.tzinfo is not None:
         return ts.tz_localize(None)
     return ts
@@ -151,8 +152,13 @@ def _parse_index(idx: pd.Index):
     if isinstance(idx, pd.DatetimeIndex):
         return idx, True
     if idx.dtype == object or pd.api.types.is_string_dtype(idx):
-        parsed = pd.to_datetime(idx, errors="coerce")
-        return parsed, bool(parsed.notna().any())
+        # 要素ごとに解析し、異なるUTC offsetが混在する場合のpandas警告と
+        # object-dtypeのdatetime.datetime混在を避ける。各要素の現地時刻は保持する。
+        parsed = [
+            pd.to_datetime(value, errors="coerce", format="mixed")
+            for value in idx
+        ]
+        return parsed, any(not pd.isna(value) for value in parsed)
     return pd.DatetimeIndex([pd.NaT] * len(idx)), False
 
 
