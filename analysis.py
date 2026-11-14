@@ -432,6 +432,12 @@ def market_today(symbol, now_utc=None):
     tz = MARKET_TIMEZONES[market_of(symbol)]
     if now_utc is None:
         return datetime.now(tz).date()
+    # now_utc はUTC基準の入力契約。naive datetime の astimezone() は
+    # 実行環境のローカルTZに依存するため、UTCを明示してから変換する。
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
     return now_utc.astimezone(tz).date()
 
 
