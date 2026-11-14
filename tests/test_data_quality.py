@@ -575,6 +575,16 @@ def test_boundary_index_mixed_timezone_strings():
     assert r.nat_count == 2
 
 
+
+def test_dates_mixed_string_formats_accepted():
+    df = make_frame(NORMAL_DATES)
+    df.index = pd.Index(["2024-01-04", "2024/01/05", "2024-01-08T00:00:00", "2024/01/09", "2024-01-10"])
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.index_is_datetime is True
+    assert r.nat_count == 0
+    assert r.anomaly_count == 0
+
+
 def test_boundary_index_unparseable_strings_all_nat():
     df = make_frame(NORMAL_DATES)
     df.index = pd.Index(["foo", "bar", "baz", "qux", "zzz"])
