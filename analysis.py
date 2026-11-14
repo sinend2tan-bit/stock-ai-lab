@@ -5,7 +5,7 @@
 - データ取得は無料の yfinance のみ。取得できない場合は失敗を明示する。
 """
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -17,6 +17,41 @@ MARKET_TIMEZONES = {
     "JP": ZoneInfo("Asia/Tokyo"),
     "US": ZoneInfo("America/New_York"),
 }
+
+# 公式取引所の休業日（株式市場）。年ごとに手動更新し、未登録年は暦日判定へ
+# 保守的にフォールバックする。土日は別途除外する。短縮取引日は営業日扱い。
+# 出典確認日: 2026-11-14。JPX現物、米国株式（NYSE/Nasdaq共通休業日）。
+MARKET_HOLIDAYS = {
+    "JP": {
+        2026: frozenset(date.fromisoformat(x) for x in (
+            "2026-01-01", "2026-01-02", "2026-01-12", "2026-02-11",
+            "2026-02-23", "2026-03-20", "2026-04-29", "2026-05-03",
+            "2026-05-04", "2026-05-05", "2026-05-06", "2026-07-20",
+            "2026-08-11", "2026-09-21", "2026-09-22", "2026-09-23",
+            "2026-10-12", "2026-11-03", "2026-11-23", "2026-12-31",
+        )),
+        2027: frozenset(date.fromisoformat(x) for x in (
+            "2027-01-01", "2027-01-02", "2027-01-11", "2027-02-11",
+            "2027-02-23", "2027-03-21", "2027-03-22", "2027-04-29",
+            "2027-05-03", "2027-05-04", "2027-05-05", "2027-07-19",
+            "2027-08-11", "2027-09-20", "2027-09-23", "2027-10-11",
+            "2027-11-03", "2027-11-23", "2027-12-31",
+        )),
+    },
+    "US": {
+        2026: frozenset(date.fromisoformat(x) for x in (
+            "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03",
+            "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07",
+            "2026-11-26", "2026-12-25",
+        )),
+        2027: frozenset(date.fromisoformat(x) for x in (
+            "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26",
+            "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06",
+            "2027-11-25", "2027-12-24",
+        )),
+    },
+}
+MARKET_CALENDAR_NAMES = {"JP": "JPX現物", "US": "NYSE（Nasdaqの2026年休業日と照合）"}
 
 # 区分ごとの最低データ本数（初期の運用基準。精度を保証する数字ではない）
 MIN_BARS_SHORT = 30
@@ -441,42 +476,88 @@ def market_today(symbol, now_utc=None):
     return now_utc.astimezone(tz).date()
 
 
-def freshness_check(df, symbol, today=None):
-    """データの新しさを暦日で暫定判定する。
+def _business_days_elapsed(market, last_date, today):
+    """登録済みの公式休業日を使い、最終データ日後の営業日数を数える。
 
-    「今日」は市場の現地日付（market_today）で数える。日本時間の日付だけで
-    米国市場のデータを判定することはしない。
-    公式の営業日カレンダーとは照合していない暫定判定であることを、
-    戻り値の note に必ず含める。
-    today を渡した場合は、その日付を市場の現地日付として扱う（テスト用）。
-    戻り値: dict(status, last_date, rows, age_days, message, note)
-      status: "fresh"（新しい）/ "check"（やや間隔あり）/ "stale"（古い可能性）/ "no_data"
+    対象年のカレンダーが一つでも未登録なら None を返し、推測しない。
+    today は市場現地日付。today 当日の取引日も経過営業日に含める。
     """
-    note = "この新旧判定は暦日による暫定チェックです。公式の営業日カレンダー（祝日・臨時休場）とは照合していません。"
+    calendars = MARKET_HOLIDAYS.get(market, {})
+    years = range(last_date.year, today.year + 1)
+    if any(year not in calendars for year in years):
+        return None
+    holidays = set().union(*(calendars[year] for year in years))
+    count = 0
+    current = last_date + timedelta(days=1)
+    while current <= today:
+        if current.weekday() < 5 and current not in holidays:
+            count += 1
+        current += timedelta(days=1)
+    return count
+
+
+def freshness_check(df, symbol, today=None):
+    """データの新しさを市場営業日ベースで暫定判定する。
+
+    JPX現物または米国株式の登録済み公式休業日を除外する。短縮取引日は
+    営業日として数える。未登録年・臨時休場未反映の場合は暦日ベースへ
+    保守的にフォールバックし、未確認カレンダーで fresh に格上げしない。
+    age_days は従来互換のため暦日数、age_trading_days は経過営業日数。
+    today を渡した場合は市場現地日付として扱う（テスト用）。
+    """
     if df is None or df.empty:
         return {
             "status": "no_data", "last_date": None, "rows": 0,
-            "age_days": None, "message": "データがありません。", "note": note,
+            "age_days": None, "age_trading_days": None,
+            "message": "データがありません。",
+            "note": "データがないため新旧判定はできません。",
         }
     last_date = df.index[-1].date()
     if today is None:
         today = market_today(symbol)
     age = (today - last_date).days
-    rows = len(df)
-    if age <= 1:
-        status = "fresh"
-        message = f"データ最終日は {last_date} です（本日から{age}日前）。"
-    elif age <= 3:
-        status = "check"
-        message = f"データ最終日は {last_date} です（本日から{age}日前）。週末・祝日を挟んだ可能性があります。"
-    else:
-        status = "stale"
-        message = (
-            f"データ最終日は {last_date} で、本日から{age}日経っています。"
-            "市場の休場だけでは説明しにくい間隔があり、データが古い可能性があります。"
-            "このデータによる分析は慎重に扱ってください。"
+    market = market_of(symbol)
+    trading_age = _business_days_elapsed(market, last_date, today)
+    if trading_age is None:
+        note = (
+            "対象年の公式休業日カレンダーが未登録のため、暦日による"
+            "保守的な暫定判定に戻しています。未確認のため fresh には格上げしません。"
         )
+        if age <= 1:
+            status = "fresh"
+            message = f"データ最終日は {last_date} です（本日から{age}暦日前）。"
+        elif age <= 3:
+            status = "check"
+            message = f"データ最終日は {last_date} です（本日から{age}暦日前）。間隔を確認してください。"
+        else:
+            status = "stale"
+            message = (
+                f"データ最終日は {last_date} で、本日から{age}暦日経っています。"
+                "データが古い可能性があります。このデータによる分析は慎重に扱ってください。"
+            )
+    else:
+        note = (
+            f"{MARKET_CALENDAR_NAMES[market]}の登録済み休業日カレンダーを使った"
+            "営業日ベースの暫定判定です。臨時休場・未公表変更は自動反映されません。"
+        )
+        if trading_age > 3:
+            status = "stale"
+            message = (
+                f"データ最終日は {last_date} です（{age}暦日・{trading_age}営業日経過）。"
+                "市場営業日ベースでも間隔が長く、データが古い可能性があります。"
+                "このデータによる分析は慎重に扱ってください。"
+            )
+        elif age <= 1:
+            status = "fresh"
+            message = f"データ最終日は {last_date} です（{age}暦日・{trading_age}営業日経過）。"
+        else:
+            status = "check"
+            message = (
+                f"データ最終日は {last_date} です（{age}暦日・{trading_age}営業日経過）。"
+                "週末・祝日を挟んだ可能性があります。"
+            )
     return {
-        "status": status, "last_date": last_date, "rows": rows,
-        "age_days": age, "message": message, "note": note,
+        "status": status, "last_date": last_date, "rows": len(df),
+        "age_days": age, "age_trading_days": trading_age,
+        "message": message, "note": note,
     }
