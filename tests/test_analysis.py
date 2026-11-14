@@ -95,6 +95,56 @@ def test_freshness_levels():
     assert empty["status"] == "no_data"
 
 
+def test_freshness_rejects_future_dated_index():
+    today = date(2026, 10, 29)
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-10-30", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=today)
+    assert result["status"] == "stale"
+    assert result["age_days"] == -1
+    assert "未来日付" in result["message"]
+
+
+def test_freshness_rejects_unsorted_index():
+    today = date(2026, 10, 29)
+    df = make_frame([100.0] * 40)
+    df.index = df.index[::-1]
+    result = analysis.freshness_check(df, "7203.T", today=today)
+    assert result["status"] == "stale"
+    assert "並んでいない" in result["message"]
+
+
+def test_freshness_rejects_duplicate_index():
+    today = date(2026, 10, 29)
+    df = make_frame([100.0] * 40)
+    dates = list(df.index)
+    dates[-1] = dates[-2]
+    df.index = pd.DatetimeIndex(dates)
+    result = analysis.freshness_check(df, "7203.T", today=today)
+    assert result["status"] == "stale"
+    assert "重複日" in result["message"]
+
+
+def test_freshness_rejects_nat_index():
+    today = date(2026, 10, 29)
+    df = make_frame([100.0] * 40)
+    dates = list(df.index)
+    dates[5] = pd.NaT
+    df.index = pd.DatetimeIndex(dates)
+    result = analysis.freshness_check(df, "7203.T", today=today)
+    assert result["status"] == "stale"
+    assert "NaT" in result["message"]
+
+
+def test_freshness_rejects_non_datetime_index():
+    today = date(2026, 10, 29)
+    df = make_frame([100.0] * 40)
+    df.index = pd.Index([str(x.date()) for x in df.index])
+    result = analysis.freshness_check(df, "7203.T", today=today)
+    assert result["status"] == "stale"
+    assert "日時として確認できない" in result["message"]
+
+
 def test_fetch_empty_result_returns_error(monkeypatch):
     # 通信をモック化し、空データが返るケースを決定的に検証する（実通信なし）
     monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
