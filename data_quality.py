@@ -151,7 +151,7 @@ def _parse_index(idx: pd.Index):
     if isinstance(idx, pd.DatetimeIndex):
         return idx, True
     if idx.dtype == object or pd.api.types.is_string_dtype(idx):
-        parsed = pd.to_datetime(idx, errors="coerce")
+        parsed = pd.to_datetime(idx, errors="coerce", format="mixed")
         return parsed, bool(parsed.notna().any())
     return pd.DatetimeIndex([pd.NaT] * len(idx)), False
 
