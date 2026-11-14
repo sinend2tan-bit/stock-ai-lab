@@ -191,7 +191,9 @@ def fetch_history(symbol, period="2y"):
     """
     _, clean, error = fetch_history_bundle(symbol, period)
     if error is not None:
-        return pd.DataFrame(), error
+        # Keep metadata on an empty result too, so callers can explain when
+        # every downloaded row was excluded by the existing dropna() step.
+        return clean, error
     return clean, None
 
 
