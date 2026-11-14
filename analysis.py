@@ -499,11 +499,8 @@ def _business_days_elapsed(market, last_date, today):
 def freshness_check(df, symbol, today=None):
     """データの新しさを市場営業日ベースで暫定判定する。
 
-    JPX現物または米国株式の登録済み公式休業日を除外する。短縮取引日は
-    営業日として数える。未登録年・臨時休場未反映の場合は暦日ベースへ
-    保守的にフォールバックし、未確認カレンダーで fresh に格上げしない。
-    age_days は従来互換のため暦日数、age_trading_days は経過営業日数。
-    today を渡した場合は市場現地日付として扱う（テスト用）。
+    日付indexの欠損・重複・逆順・未来日付は、鮮度判定不能として stale にする。
+    これらのデータはスキャンランキングへ入れない。価格・スコア計算は変更しない。
     """
     if df is None or df.empty:
         return {
@@ -512,10 +509,49 @@ def freshness_check(df, symbol, today=None):
             "message": "データがありません。",
             "note": "データがないため新旧判定はできません。",
         }
-    last_date = df.index[-1].date()
     if today is None:
         today = market_today(symbol)
+
+    index = df.index
+    if not isinstance(index, pd.DatetimeIndex):
+        return {
+            "status": "stale", "last_date": None, "rows": len(df),
+            "age_days": None, "age_trading_days": None,
+            "message": "日付indexを日時として確認できないため、ランキング対象外にしました。",
+            "note": "日付indexの形式が不正または未対応です。",
+        }
+    if index.hasnans:
+        return {
+            "status": "stale", "last_date": None, "rows": len(df),
+            "age_days": None, "age_trading_days": None,
+            "message": "日付indexに解釈できない日付（NaT）があるため、ランキング対象外にしました。",
+            "note": "日付indexの欠損は鮮度判定を妨げます。",
+        }
+    if index.has_duplicates:
+        return {
+            "status": "stale", "last_date": index[-1].date(), "rows": len(df),
+            "age_days": None, "age_trading_days": None,
+            "message": "日付indexに重複日があるため、ランキング対象外にしました。",
+            "note": "同一日の重複データは鮮度判定を妨げます。",
+        }
+    if not index.is_monotonic_increasing:
+        return {
+            "status": "stale", "last_date": index[-1].date(), "rows": len(df),
+            "age_days": None, "age_trading_days": None,
+            "message": "日付indexが古い順に並んでいないため、ランキング対象外にしました。",
+            "note": "日付indexの順序が不正です。元データを確認してください。",
+        }
+
+    last_date = index[-1].date()
     age = (today - last_date).days
+    if age < 0:
+        return {
+            "status": "stale", "last_date": last_date, "rows": len(df),
+            "age_days": age, "age_trading_days": None,
+            "message": f"データ最終日 {last_date} が市場現地日付 {today} より未来です。未来日付を含むためランキング対象外にしました。",
+            "note": "未来日付のデータは鮮度を確認できません。データ提供元・時刻変換を確認してください。",
+        }
+
     market = market_of(symbol)
     trading_age = _business_days_elapsed(market, last_date, today)
     if trading_age is None:
