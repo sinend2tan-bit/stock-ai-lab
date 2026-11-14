@@ -156,7 +156,7 @@ def _split_raw_clean(df):
     except Exception as exc:
         return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
     if clean.empty:
-        return raw, pd.DataFrame(), "取得したデータが空でした（欠損のみ）。"
+        return raw, clean, "取得したデータが空でした（欠損のみ）。"
     return raw, clean, None
 
 
