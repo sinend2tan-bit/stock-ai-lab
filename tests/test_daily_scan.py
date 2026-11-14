@@ -74,7 +74,9 @@ def test_all_60_today_writes_csv_and_complete_status(tmp_path):
     assert csv_path.exists()
     assert status["完成版CSV"] == csv_path.name
     text = csv_path.read_bytes().decode("utf-8-sig")
-    assert "ランキング" in text
+    assert "順位" in text
+    assert "コード" in text
+    assert "会社名" in text
     for code in ("7203.T", "9984.T", "1605.T"):
         assert code in text
     # 状態JSONがファイルにも同じ内容で残っていること
