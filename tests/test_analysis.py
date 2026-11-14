@@ -431,3 +431,13 @@ def test_freshness_unknown_calendar_year_falls_back_conservatively():
     assert result["status"] == "stale"
     assert result["age_trading_days"] is None
     assert "未登録" in result["note"]
+
+
+def test_freshness_unknown_calendar_year_preserves_recent_calendar_freshness():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2028-01-09", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2028, 1, 10))
+    assert result["status"] == "fresh"
+    assert result["age_days"] == 1
+    assert result["age_trading_days"] is None
+    assert "従来の暦日基準" in result["note"]
