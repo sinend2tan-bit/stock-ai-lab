@@ -155,6 +155,28 @@ def test_gap_skipping_weekday_is_review_only():
     assert r.anomaly_count == 0
 
 
+def test_known_market_holiday_is_not_reported_as_missing_trading_day():
+    dates = ["2026-11-02", "2026-11-04"]  # 11/3 is a JPX holiday
+    holidays = {2026: {pd.Timestamp("2026-11-03").date()}}
+    r = diagnose_history(
+        make_frame(dates), market="JP", holidays_by_year=holidays
+    )
+    assert r.review_gaps == []
+    assert r.review_count == 0
+
+
+def test_market_gap_counts_only_non_holiday_weekdays():
+    dates = ["2026-11-02", "2026-11-05"]  # 11/3 holiday; 11/4 trading day
+    holidays = {2026: {pd.Timestamp("2026-11-03").date()}}
+    r = diagnose_history(
+        make_frame(dates), market="JP", holidays_by_year=holidays
+    )
+    assert len(r.review_gaps) == 1
+    assert r.review_gaps[0]["skipped_weekdays"] == 2
+    assert r.review_gaps[0]["skipped_holidays"] == 1
+    assert r.review_gaps[0]["skipped_trading_days"] == 1
+
+
 def test_dates_string_index_accepted():
     df = make_frame(NORMAL_DATES)
     df.index = pd.Index([d for d in NORMAL_DATES])
