@@ -313,7 +313,7 @@ with tab_overview:
             file_name="stock_ai_watchlist.csv",
             mime="text/csv",
         )
-        st.caption("データの新旧は暦日による暫定チェックです。公式の営業日カレンダーとは照合していません。個別分析タブで銘柄ごとの詳細と警告を確認してください。")
+        st.caption("データの新旧は登録済みの公式休業日を除いた営業日ベースで暫定判定します。臨時休場・未公表変更や未登録年は完全には反映されません。個別分析タブで詳細と警告を確認してください。")
 
 with tab_detail:
     st.subheader("個別銘柄のテクニカル分析")
