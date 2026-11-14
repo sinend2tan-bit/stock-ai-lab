@@ -505,3 +505,17 @@ def test_freshness_unknown_calendar_year_preserves_recent_calendar_freshness():
     assert result["age_days"] == 1
     assert result["age_trading_days"] is None
     assert "従来の暦日基準" in result["note"]
+
+
+
+def test_fetch_history_preserves_missing_count_when_all_rows_are_dropped(monkeypatch):
+    source = _frame_with_nan_row()
+    source["Close"] = np.nan
+    monkeypatch.setattr(analysis, "_download_history", lambda *a, **k: (source, None))
+
+    clean, err = analysis.fetch_history("7203.T", period="1y")
+
+    assert clean.empty
+    assert err is not None and "欠損のみ" in err
+    assert clean.attrs["rows_dropped_by_dropna"] == len(source)
+    assert clean.attrs["raw_row_count"] == len(source)
