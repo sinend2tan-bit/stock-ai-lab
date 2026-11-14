@@ -378,3 +378,67 @@ def test_diagnosis_does_not_change_scores_or_raw(monkeypatch):
     assert before == after
     pd.testing.assert_frame_equal(raw, snapshot)
     pd.testing.assert_frame_equal(source, snapshot)
+
+
+def test_freshness_jp_golden_week_uses_jpx_holidays():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-04-30", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2026, 5, 7))
+    assert result["status"] == "check"
+    assert result["age_days"] == 7
+    assert result["age_trading_days"] == 2
+    assert "JPX現物" in result["note"]
+
+
+def test_freshness_jp_september_holidays_are_excluded():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-09-18", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2026, 9, 24))
+    assert result["status"] == "check"
+    assert result["age_trading_days"] == 1
+
+
+def test_freshness_jp_year_end_and_new_year_holidays_are_excluded():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-12-30", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2027, 1, 4))
+    assert result["status"] == "check"
+    assert result["age_trading_days"] == 1
+
+
+def test_freshness_us_good_friday_is_excluded():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-04-02", periods=40)
+    result = analysis.freshness_check(df, "AAPL", today=date(2026, 4, 6))
+    assert result["status"] == "check"
+    assert result["age_days"] == 4
+    assert result["age_trading_days"] == 1
+
+
+def test_freshness_us_thanksgiving_and_early_close():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2026-11-25", periods=40)
+    result = analysis.freshness_check(df, "AAPL", today=date(2026, 11, 30))
+    assert result["status"] == "check"
+    # 11/27は短縮取引日だが、休業日ではないため営業日として数える
+    assert result["age_trading_days"] == 2
+
+
+def test_freshness_unknown_calendar_year_falls_back_conservatively():
+    df = make_frame([100.0] * 40)
+    df.index = pd.bdate_range(end="2028-01-03", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2028, 1, 10))
+    assert result["status"] == "stale"
+    assert result["age_trading_days"] is None
+    assert "未登録" in result["note"]
+
+
+def test_freshness_unknown_calendar_year_preserves_recent_calendar_freshness():
+    df = make_frame([100.0] * 40)
+    # 2028-01-06（木）のデータを翌営業日2028-01-07（金）に確認
+    df.index = pd.bdate_range(end="2028-01-06", periods=40)
+    result = analysis.freshness_check(df, "7203.T", today=date(2028, 1, 7))
+    assert result["status"] == "fresh"
+    assert result["age_days"] == 1
+    assert result["age_trading_days"] is None
+    assert "従来の暦日基準" in result["note"]
