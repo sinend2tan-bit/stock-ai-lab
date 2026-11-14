@@ -557,8 +557,7 @@ def test_boundary_duplicate_nonrequired_column_rejected():
 
 
 def test_boundary_index_mixed_timezone_strings():
-    # 形式の混在した文字列は例外にせず、解釈できた日付だけを使う。
-    # 先頭要素と形式が異なる要素は NaT として記録する（現行仕様の固定）
+    # 形式・UTC offsetが混在する文字列も個別に解析し、現地日付を保持する。
     df = make_frame(NORMAL_DATES)
     df.index = pd.Index(
         [
@@ -571,8 +570,9 @@ def test_boundary_index_mixed_timezone_strings():
     )
     r = diagnose_history(df, as_of=AS_OF)
     assert r.index_is_datetime is True
-    assert r.nat_rows == [1, 3]
-    assert r.nat_count == 2
+    assert r.nat_rows == []
+    assert r.nat_count == 0
+    assert r.future_dates == []
 
 
 
