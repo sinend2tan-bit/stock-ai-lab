@@ -138,6 +138,25 @@ def test_stale_data_goes_to_excluded():
     assert "古い可能性" in excluded[0]["警告・理由"]
 
 
+def test_future_dated_data_is_excluded_from_ranking():
+    future = (
+        pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
+        + pd.Timedelta(days=5)
+    )
+    frame = rising()
+    frame.index = frame.index[:-1].append(pd.DatetimeIndex([future]))
+    universe = [("FUTURE.T", "未来日付社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"FUTURE.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="future-index-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "未来日付" in excluded[0]["警告・理由"]
+
+
 def test_insufficient_bars_goes_to_excluded():
     short = make_frame([100.0 + 0.2 * k for k in range(50)])  # 中期の最低80本に不足
     universe = [("NEW.T", "短い社", "テスト")]
