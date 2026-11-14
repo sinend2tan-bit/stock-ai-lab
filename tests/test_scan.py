@@ -138,6 +138,41 @@ def test_stale_data_goes_to_excluded():
     assert "古い可能性" in excluded[0]["警告・理由"]
 
 
+def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("High")] = (
+        frame.iloc[-1]["Close"] * 0.5
+    )
+    universe = [("BADPRICE.T", "価格異常社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"BADPRICE.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="quality-warning-test",
+    )
+    assert len(ranked) == 1
+    assert excluded == []
+    assert "データ品質の異常候補" in ranked[0]["警告・理由"]
+
+
+def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("diagnostic unavailable")
+
+    monkeypatch.setattr(scan.data_quality, "diagnose_history", fail)
+    frame = rising()
+    universe = [("DIAGFAIL.T", "診断失敗社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"DIAGFAIL.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="quality-diagnostic-failure-test",
+    )
+    assert len(ranked) == 1
+    assert excluded == []
+    assert "データ品質診断不能" in ranked[0]["警告・理由"]
+
+
 def test_future_dated_data_is_excluded_from_ranking():
     future = (
         pd.Timestamp.now(tz="Asia/Tokyo").normalize().tz_localize(None)
