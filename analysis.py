@@ -156,7 +156,7 @@ def _split_raw_clean(df):
     except Exception as exc:
         return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
     if clean.empty:
-        return raw, pd.DataFrame(), "取得したデータが空でした（欠損のみ）。"
+        return raw, clean, "取得したデータが空でした（欠損のみ）。"
     return raw, clean, None
 
 
@@ -191,7 +191,9 @@ def fetch_history(symbol, period="2y"):
     """
     _, clean, error = fetch_history_bundle(symbol, period)
     if error is not None:
-        return pd.DataFrame(), error
+        # Keep metadata on an empty result too, so callers can explain when
+        # every downloaded row was excluded by the existing dropna() step.
+        return clean, error
     return clean, None
 
 

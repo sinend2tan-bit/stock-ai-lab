@@ -278,3 +278,24 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
 
     assert len(ranked) == 1 and excluded == []
     assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+
+
+
+def test_scan_reports_all_rows_dropped_when_fallback_has_no_data():
+    frame = rising()
+    frame["Close"] = float("nan")
+    shaped = scan._shape(frame)
+    assert shaped.empty
+    assert shaped.attrs["rows_dropped_by_dropna"] == len(frame)
+    universe = [("ALLMISSING.T", "全行欠損社", "テスト")]
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda symbols: {"ALLMISSING.T": (shaped, "batch has no clean rows")},
+        lambda symbol: (pd.DataFrame(), "取得したデータが空でした（欠損のみ）。"),
+        run_at="all-missing-row-test",
+    )
+
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "欠損行除外：300行" in excluded[0]["警告・理由"]

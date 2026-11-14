@@ -159,7 +159,8 @@ def fetch_batch(symbols, period=SCAN_PERIOD):
                     sub = pd.DataFrame()
                 shaped = _shape(sub)
                 if shaped.empty:
-                    results[sym] = (pd.DataFrame(), "一括取得でデータが取れませんでした")
+                    # Preserve the dropna count even when no usable rows remain.
+                    results[sym] = (shaped, "一括取得でデータが取れませんでした")
                 else:
                     results[sym] = (shaped, None)
         else:
@@ -216,7 +217,17 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
     for done, (symbol, name, sector) in enumerate(universe, start=1):
         raw, err = batch.get(symbol, (pd.DataFrame(), "一括取得の対象になりませんでした"))
         if err is not None or raw is None or raw.empty:
+            batch_dropped_rows = int(
+                getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
+            )
             raw, err = single_fetcher(symbol)
+            single_dropped_rows = int(
+                getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
+            )
+            if batch_dropped_rows and not single_dropped_rows:
+                # If the fallback itself fails, retain the batch diagnostic count.
+                raw = raw.copy() if raw is not None else pd.DataFrame()
+                raw.attrs["rows_dropped_by_dropna"] = batch_dropped_rows
         base = {
             "区分": "", "順位": None, "コード": symbol, "会社名": name, "業種": sector,
             "中期スコア": None, "中期ラベル": "", "短期スコア": None, "短期ラベル": "",
@@ -226,7 +237,13 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
         }
         if err is not None or raw is None or raw.empty:
             base["区分"] = "参考外"
-            base["警告・理由"] = f"取得失敗：{err or 'データなし'}"
+            failure_reason = err or "データなし"
+            dropped_rows = int(
+                getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
+            )
+            if dropped_rows:
+                failure_reason += f"（欠損行除外：{dropped_rows}行）"
+            base["警告・理由"] = f"取得失敗：{failure_reason}"
             excluded.append(base)
         else:
             quality_warnings = _data_quality_warnings(raw, symbol)
