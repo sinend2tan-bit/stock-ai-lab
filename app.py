@@ -147,8 +147,11 @@ def show_data_quality(raw, symbol):
         "診断で問題がなくても、データの正確性を保証するものではありません。"
     )
     try:
+        market = analysis.market_of(symbol)
         report = data_quality.diagnose_history(
-            raw, market=analysis.market_of(symbol)
+            raw,
+            market=market,
+            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         ).to_dict()
     except Exception as exc:
         st.warning(
@@ -208,7 +211,7 @@ def show_data_quality(raw, symbol):
         for gap in report["review_gaps"]:
             st.write(
                 f"• 日付間隔の要確認：{gap['from_date']} → {gap['to_date']}"
-                f"（平日 {gap['skipped_weekdays']} 日分）。"
+                f"（市場営業日 {gap['skipped_trading_days']} 日分）。"
                 "週末・祝日・臨時休場の可能性があり、異常とは断定しません。"
             )
         if (
