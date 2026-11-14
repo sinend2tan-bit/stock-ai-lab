@@ -194,6 +194,12 @@ def test_market_today_uses_market_timezone():
     assert analysis.market_today("7203.T", now_utc=now_utc) == date(2026, 10, 30)
     assert analysis.market_today("AAPL", now_utc=now_utc) == date(2026, 10, 29)
 
+def test_market_today_treats_naive_input_as_utc():
+    # naive入力もUTCとして解釈し、実行環境のローカルTZに依存させない。
+    now_utc = datetime(2026, 10, 29, 8, 0)
+    assert analysis.market_today("AAPL", now_utc=now_utc) == date(2026, 10, 29)
+    assert analysis.market_today("7203.T", now_utc=now_utc) == date(2026, 10, 29)
+
 
 def test_freshness_weekend_gap_is_check_not_stale():
     # 米国市場：金曜のデータに対して月曜（市場日付）では「間隔あり」まで
