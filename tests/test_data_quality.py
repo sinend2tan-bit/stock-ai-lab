@@ -1042,3 +1042,17 @@ def test_cross_year_gap_requires_complete_holiday_calendar():
     assert fallback_report.review_gaps[0]["skipped_weekdays"] == 1
     assert fallback_report.review_gaps[0]["skipped_holidays"] == 0
     assert fallback_report.review_gaps[0]["skipped_trading_days"] == 1
+
+
+def test_cross_year_gap_falls_back_when_end_year_calendar_is_missing():
+    # 開始年だけ登録され、終了年が欠けている場合も全年度未完備として
+    # 休場日を差し引かず、平日ベースで要確認にする。
+    dates = ["2026-12-31", "2027-01-04"]
+    partial = {2026: set()}
+    report = diagnose_history(
+        make_frame(dates), as_of="2027-01-04", holidays_by_year=partial
+    )
+    assert len(report.review_gaps) == 1
+    assert report.review_gaps[0]["skipped_weekdays"] == 1
+    assert report.review_gaps[0]["skipped_holidays"] == 0
+    assert report.review_gaps[0]["skipped_trading_days"] == 1
