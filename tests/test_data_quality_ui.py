@@ -179,3 +179,25 @@ def test_detail_tab_holds_scores_when_data_is_stale(monkeypatch):
     texts = _all_text(at)
     assert any("最新データが古い" in t for t in texts)
     assert "条件スコア" not in [m.label for m in at.metric]
+
+def test_detail_tab_runs_quality_diagnostic_once(monkeypatch):
+    # The same raw frame should be diagnosed once per render, not repeatedly
+    # through duplicate show_data_quality() calls.
+    raw = _frame()
+    clean = raw.copy()
+    calls = []
+    original = data_quality.diagnose_history
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(data_quality, "diagnose_history", counted)
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    assert len(calls) == 1
