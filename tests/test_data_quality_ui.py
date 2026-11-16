@@ -1,7 +1,7 @@
 """個別分析タブの品質診断表示（AppTest）。
 
 取得は analysis の関数をモックして実通信をしない。診断表示が出ることと、
-診断があってもスコア表示が従来どおり出ることを確認する。
+品質不良時はスコアを保留し、ゼロ出来高単独なら表示を維持することを確認する。
 画面の目視確認ではなく、AppTest 上の要素テキストによる確認である。
 """
 
@@ -44,7 +44,7 @@ def _all_text(at):
     return texts
 
 
-def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
+def test_detail_tab_holds_scores_on_ohlc_anomaly(monkeypatch):
     raw = _frame()
     raw.iloc[10, raw.columns.get_loc("Volume")] = 0.0  # 警告候補
     raw.iloc[20, raw.columns.get_loc("High")] = 1.0  # 異常候補
@@ -60,9 +60,10 @@ def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("異常候補" in t and "件あります" in t for t in texts)
     assert any("売買シグナルではありません" in t for t in texts)
-    # 診断があってもスコア表示は従来どおり出る（診断はスコアを変えない）
+    # OHLC異常がある場合はスコアを表示しない
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
+    assert any("品質ゲートにより分析を保留" in t for t in texts)
 
 
 def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch):
@@ -87,7 +88,7 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
 
 def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
-    # 分析・スコア表示は従来どおり行う（診断不能表示の境界）。
+    # 品質を確認できないためスコアを保留する。
     raw = _frame()
     clean = raw.copy()
 
@@ -106,12 +107,12 @@ def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("診断不能" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
 
 
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
     # 診断対象は clean ではなく raw：raw の欠損行が「dropna除外候補」として
-    # 件数に現れること、分析は clean で行われスコアが出ることを確認する。
+    # 件数に現れ、欠損があるためスコアが保留されることを確認する。
     raw = _frame()
     raw.iloc[15, raw.columns.get_loc("Close")] = np.nan
     clean = raw.dropna().copy()
@@ -126,7 +127,23 @@ def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
     texts = _all_text(at)
     assert any("欠損行（dropna除外候補）：1行" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
+
+
+def test_detail_tab_zero_volume_only_keeps_score(monkeypatch):
+    raw = _frame()
+    raw.iloc[10, raw.columns.get_loc("Volume")] = 0.0
+    clean = raw.copy()
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    texts = _all_text(at)
+    assert any("出来高ゼロの警告候補" in t for t in texts)
+    assert "条件スコア" in [m.label for m in at.metric]
 
 
 def test_detail_tab_fetches_bundle_once(monkeypatch):
