@@ -637,7 +637,7 @@ with tab_scan:
             batch = get_batch(tuple(syms), scan.SCAN_PERIOD)
             for sym, (df, err) in batch.items():
                 if err is None and df is not None and not df.empty:
-                captured_frames[sym] = df.copy()
+                    captured_frames[sym] = df.copy()
             return batch
 
         def single_fetcher(symbol):
