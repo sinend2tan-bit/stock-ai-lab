@@ -239,6 +239,36 @@ def test_scan_csv_contains_both_sections():
 
 # --- 欠損行の除外数（表示専用） ---
 
+def test_shape_multiindex_ticker_first_selects_requested_symbol():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+
+    shaped = scan._shape(source, symbol="7203.T")
+
+    pd.testing.assert_frame_equal(shaped, target)
+
+
+def test_shape_multiindex_price_first_selects_requested_symbol():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1).swaplevel(0, 1, axis=1)
+
+    shaped = scan._shape(source, symbol="7203.T")
+
+    pd.testing.assert_frame_equal(shaped, target)
+
+
+def test_shape_multiindex_unknown_symbol_is_rejected():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+
+    shaped = scan._shape(source, symbol="9999.T")
+
+    assert shaped.empty
+
+
 def test_scan_shape_preserves_missing_row_drop_count():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
