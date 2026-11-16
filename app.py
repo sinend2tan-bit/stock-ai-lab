@@ -337,20 +337,17 @@ with tab_detail:
                 st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
                 show_data_quality(raw_hist, selected_symbol)
         else:
+            # Compute indicators and diagnostics once; duplicate calls previously
+            # rendered the same quality/freshness messages multiple times.
             df = analysis.add_indicators(clean_hist)
-            show_freshness(df, selected_symbol)
-            show_data_quality(raw_hist, selected_symbol)
+            freshness = show_freshness(df, selected_symbol)
             quality_ok = show_data_quality(raw_hist, selected_symbol)
             if not quality_ok:
                 st.error("データ品質を確認できないため、テクニカルスコア・判定を表示しません。")
+            elif freshness["status"] == "stale":
+                st.error("最新データが古いため、テクニカルスコア・判定を保留します。")
             else:
-                df = analysis.add_indicators(clean_hist)
-                show_freshness(df, selected_symbol)
-                freshness = show_freshness(df, selected_symbol)
-                if freshness["status"] == "stale":
-                    st.error("最新データが古いため、テクニカルスコア・判定を保留します。")
-                else:
-                    latest = df.iloc[-1]
+                latest = df.iloc[-1]
                     c1, c2, c3, c4 = st.columns(4)
                     c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
                     c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
