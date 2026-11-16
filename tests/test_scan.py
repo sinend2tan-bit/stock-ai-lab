@@ -224,7 +224,7 @@ def test_scan_quality_gap_warning_ignores_official_jp_holiday():
     assert not any("日付間隔の要確認" in warning for warning in warnings)
 
 
-def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
+def test_scan_quality_diagnostic_failure_is_excluded(monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("diagnostic unavailable")
 
@@ -237,9 +237,9 @@ def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
         lambda symbol: (frame, None),
         run_at="quality-diagnostic-failure-test",
     )
-    assert len(ranked) == 1
-    assert excluded == []
-    assert "データ品質診断不能" in ranked[0]["警告・理由"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "データ品質診断不能" in excluded[0]["警告・理由"]
 
 
 def test_future_dated_data_is_excluded_from_ranking():
