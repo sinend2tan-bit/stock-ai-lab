@@ -339,7 +339,7 @@ def test_scan_excludes_dropped_ohlcv_row_on_single_fetch_fallback():
 
     assert ranked == []
     assert len(excluded) == 1
-    assert "必須OHLCV欠損により1行を除外" in excluded[0]["警告・理由"]
+    assert "必須OHLCV欠損 1行" in excluded[0]["警告・理由"]
 
 
 
