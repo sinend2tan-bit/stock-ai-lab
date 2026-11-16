@@ -537,11 +537,17 @@ with tab_verify:
 
     v_records = st.session_state.verify_records
     if v_records or st.session_state.verify_exclusions:
+        def _record_spec_version(item):
+            try:
+                return int(item.get("仕様版数") or 1)
+            except (TypeError, ValueError):
+                return 1
+
         legacy_records = sum(
-            int(r.get("仕様版数", 1)) != verify.SPEC_VERSION for r in v_records
+            _record_spec_version(r) != verify.SPEC_VERSION for r in v_records
         )
         legacy_exclusions = sum(
-            int(r.get("仕様版数", 1)) != verify.SPEC_VERSION
+            _record_spec_version(r) != verify.SPEC_VERSION
             for r in st.session_state.verify_exclusions
         )
         if legacy_records or legacy_exclusions:
