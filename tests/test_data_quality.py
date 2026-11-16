@@ -1017,3 +1017,42 @@ def test_required_columns_default_matches_explicit_ohlcv():
         required_columns=["Open", "High", "Low", "Close", "Volume"],
     ).to_dict()
     assert as_list == explicit
+
+
+# ---------- 5. 分析・ランキング共通の品質ゲート ----------
+
+
+def test_blocking_reasons_do_not_block_zero_volume_warning_alone():
+    df = make_frame(
+        NORMAL_DATES, volume=[1000.0, 0.0, 1000.0, 1000.0, 1000.0]
+    )
+    report = diagnose_history(df, as_of=AS_OF)
+    assert report.warning_count == 1
+    assert report.blocking_reasons() == []
+
+
+def test_blocking_reasons_include_ohlc_anomalies():
+    df = make_frame(NORMAL_DATES, high=[101.0, 99.0, 101.0, 101.0, 101.0])
+    report = diagnose_history(df, as_of=AS_OF)
+    assert any("OHLC価格異常" in reason for reason in report.blocking_reasons())
+
+
+def test_blocking_reasons_include_unresolved_market_day_gaps():
+    df = make_frame(["2024-01-05", "2024-01-09"])
+    report = diagnose_history(df, as_of=AS_OF)
+    assert any("営業日欠損の可能性" in reason for reason in report.blocking_reasons())
+
+
+def test_blocking_reasons_include_missing_rows_and_dropped_row_metadata():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, np.nan, 100.0, 100.0, 100.0],
+    )
+    report = diagnose_history(df, as_of=AS_OF)
+    assert any("必須OHLCV欠損" in reason for reason in report.blocking_reasons())
+
+    clean_report = diagnose_history(make_frame(NORMAL_DATES), as_of=AS_OF)
+    assert any(
+        "必須OHLCV欠損 2行" in reason
+        for reason in clean_report.blocking_reasons(dropped_rows=2)
+    )
