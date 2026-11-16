@@ -227,8 +227,14 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             single_dropped_rows = int(
                 getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
             )
-            if batch_dropped_rows and not single_dropped_rows:
-                # If the fallback itself fails, retain the batch diagnostic count.
+            if (
+                batch_dropped_rows
+                and not single_dropped_rows
+                and (err is not None or raw is None or raw.empty)
+            ):
+                # Retain the batch diagnostic count only when the fallback also fails.
+                # A successful fallback has its own row-drop metadata (or none), so
+                # the failed batch's count must not be attributed to its data.
                 raw = raw.copy() if raw is not None else pd.DataFrame()
                 raw.attrs["rows_dropped_by_dropna"] = batch_dropped_rows
         base = {
