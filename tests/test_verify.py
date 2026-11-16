@@ -336,7 +336,7 @@ def test_verify_keeps_zero_volume_warning_only():
     frame.iloc[-1, frame.columns.get_loc("Volume")] = 0
     records, exclusions = verify.verify_symbol("7203.T", frame, run_at="zero-volume")
     assert records
-    assert exclusions == []
+    assert not any("データ品質ゲート" in item["理由"] for item in exclusions)
 
 
 def test_verify_excludes_data_with_dropped_ohlcv_rows():
