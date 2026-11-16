@@ -418,6 +418,21 @@ def test_bundle_multiindex_ambiguous_ticker_returns_clear_error(monkeypatch):
     assert err is not None and "対象銘柄 9999.T" in err
 
 
+def test_bundle_does_not_borrow_missing_field_from_another_ticker(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)]).drop(columns=["Volume"])
+    other = make_frame([200.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert "Volume" not in raw.columns
+    assert raw.empty is False
+    assert clean.empty
+    assert err is not None and "必要な列" in err
+
+
 def test_bundle_missing_columns_returns_raw_and_error(monkeypatch):
     monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
     source = make_frame([100.0] * 40).drop(columns=["Volume"])
