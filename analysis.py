@@ -155,16 +155,22 @@ def _split_raw_clean(df, symbol=None):
                     pos for pos, column in enumerate(work.columns)
                     if column[price_level] == field
                 ]
-                if len(positions) > 1 and symbol:
+                if symbol and ticker_levels:
                     wanted = str(symbol).strip().upper()
+                    matched = False
                     for ticker_level in ticker_levels:
                         matches = [
                             pos for pos in positions
                             if str(work.columns[pos][ticker_level]).strip().upper() == wanted
                         ]
-                        if len(matches) == 1:
+                        if matches:
                             positions = matches
+                            matched = True
                             break
+                    if not matched:
+                        # Never borrow a field from another ticker merely because
+                        # the requested ticker's corresponding column is absent.
+                        positions = []
                 if len(positions) == 1:
                     normalized[field] = work.iloc[:, positions[0]]
                 elif len(positions) > 1:
