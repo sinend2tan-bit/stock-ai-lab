@@ -141,13 +141,23 @@ def _split_raw_clean(df, symbol=None):
         work = df.copy()
         if isinstance(work.columns, pd.MultiIndex):
             levels = range(work.columns.nlevels)
-            price_level = max(
-                levels,
-                key=lambda level: sum(
+            level_scores = {
+                level: sum(
                     value in NEEDED_COLUMNS
                     for value in work.columns.get_level_values(level)
-                ),
-            )
+                )
+                for level in levels
+            }
+            best_score = max(level_scores.values(), default=0)
+            best_levels = [
+                level for level, score in level_scores.items()
+                if score == best_score and score > 0
+            ]
+            if len(best_levels) != 1:
+                raise ValueError(
+                    "価格列（OHLCV）を含むMultiIndexの階層を一意に特定できません"
+                )
+            price_level = best_levels[0]
             normalized = {}
             ticker_levels = [level for level in levels if level != price_level]
             if symbol and ticker_levels:
