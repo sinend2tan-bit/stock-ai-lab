@@ -537,6 +537,19 @@ with tab_verify:
 
     v_records = st.session_state.verify_records
     if v_records or st.session_state.verify_exclusions:
+        legacy_records = sum(
+            int(r.get("仕様版数", 1)) != verify.SPEC_VERSION for r in v_records
+        )
+        legacy_exclusions = sum(
+            int(r.get("仕様版数", 1)) != verify.SPEC_VERSION
+            for r in st.session_state.verify_exclusions
+        )
+        if legacy_records or legacy_exclusions:
+            st.info(
+                f"旧仕様版の記録 {legacy_records}件・対象外集計 {legacy_exclusions}件は、"
+                f"現行仕様 v{verify.SPEC_VERSION} の精度集計から分離しています。"
+                "旧版と新版の結果は混ぜません。"
+            )
         summary = verify.aggregate(v_records, st.session_state.verify_exclusions)
         st.markdown("**時間軸別の集計（的中率の分母は的中＋不的中のみ）**")
         horizon_df = pd.DataFrame(summary["時間軸別"])
