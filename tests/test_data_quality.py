@@ -1038,7 +1038,7 @@ def test_blocking_reasons_include_ohlc_anomalies():
 
 
 def test_blocking_reasons_include_unresolved_market_day_gaps():
-    df = make_frame(["2024-01-05", "2024-01-09"])
+    df = make_frame(["2024-01-04", "2024-01-09"])
     report = diagnose_history(df, as_of=AS_OF)
     assert any("営業日欠損の可能性" in reason for reason in report.blocking_reasons())
 
