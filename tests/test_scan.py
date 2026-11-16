@@ -153,7 +153,7 @@ def test_scan_excludes_ohlc_anomaly_before_ranking():
     assert ranked == []
     assert len(excluded) == 1
     assert "データ品質ゲートで除外" in excluded[0]["警告・理由"]
-    assert "構造・価格・出来高の異常候補" in excluded[0]["警告・理由"]
+    assert "OHLC価格異常" in excluded[0]["警告・理由"]
 
 
 def test_scan_keeps_zero_volume_as_warning_only():
@@ -305,7 +305,7 @@ def test_scan_shape_preserves_missing_row_drop_count():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
-def test_scan_displays_missing_row_drop_count_without_changing_score():
+def test_scan_excludes_data_when_required_ohlcv_row_was_dropped():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
     shaped = scan._shape(frame)
@@ -315,23 +315,15 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
         universe,
         lambda symbols: {"MISSING.T": (shaped, None)},
         lambda symbol: (shaped, None),
-        run_at="missing-row-warning-test",
-    )
-    baseline, _, _ = scan.run_scan(
-        universe,
-        lambda symbols: {"MISSING.T": (frame.dropna().copy(), None)},
-        lambda symbol: (frame.dropna().copy(), None),
-        run_at="missing-row-baseline-test",
+        run_at="missing-row-gate-test",
     )
 
-    assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
-    assert ranked[0]["中期スコア"] == baseline[0]["中期スコア"]
-    assert ranked[0]["短期スコア"] == baseline[0]["短期スコア"]
-    assert ranked[0]["長期スコア"] == baseline[0]["長期スコア"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "必須OHLCV欠損により1行を除外" in excluded[0]["警告・理由"]
 
 
-def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
+def test_scan_excludes_dropped_ohlcv_row_on_single_fetch_fallback():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
     _, clean, error = scan.analysis._split_raw_clean(frame)
@@ -342,11 +334,12 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
         universe,
         lambda symbols: {"FALLBACK.T": (pd.DataFrame(), "batch unavailable")},
         lambda symbol: (clean, None),
-        run_at="missing-row-fallback-test",
+        run_at="missing-row-fallback-gate-test",
     )
 
-    assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "必須OHLCV欠損により1行を除外" in excluded[0]["警告・理由"]
 
 
 
