@@ -116,9 +116,13 @@ def _shape(df, symbol=None):
     if df is None or df.empty:
         return pd.DataFrame()
     try:
-        _, clean, error = analysis._split_raw_clean(df, symbol=symbol)
+        raw, clean, error = analysis._split_raw_clean(df, symbol=symbol)
         if error:
-            return pd.DataFrame()
+            # Keep diagnostic metadata even when every row is excluded by dropna().
+            if raw is not None and not raw.empty:
+                clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
+                clean.attrs["raw_row_count"] = len(raw)
+            return clean
         return clean
     except Exception:
         return pd.DataFrame()
