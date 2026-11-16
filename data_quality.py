@@ -118,6 +118,39 @@ class DataQualityReport:
     def has_anomalies(self) -> bool:
         return self.anomaly_count > 0
 
+    def blocking_reasons(self, *, dropped_rows=0) -> list:
+        """分析・ランキングを保留すべき品質問題を、根拠付きで返す。
+
+        出来高ゼロだけは警告にとどめる。欠損、時刻系列の不整合、
+        OHLC矛盾、負値/非有限出来高、未解決の営業日ギャップは保留対象。
+        """
+        reasons = []
+        missing_rows = max(self.rows_with_missing, int(dropped_rows or 0))
+        if self.missing_columns:
+            reasons.append(f"必須列欠落 {len(self.missing_columns)}列")
+        if missing_rows:
+            reasons.append(f"必須OHLCV欠損 {missing_rows}行")
+        if self.nat_count:
+            reasons.append(f"日付不正 {self.nat_count}行")
+        if self.duplicate_row_count:
+            reasons.append(f"重複日付に関係する行 {self.duplicate_row_count}行")
+        if self.out_of_order:
+            reasons.append(f"日付順序逆転 {len(self.out_of_order)}件")
+        if self.future_dates:
+            reasons.append(f"未来日付 {len(self.future_dates)}件")
+        price_issue_count = sum(len(items) for items in self.price_issues.values())
+        if price_issue_count:
+            reasons.append(f"OHLC価格異常 {price_issue_count}件")
+        volume_issue_count = (
+            len(self.volume_issues.get("negative", []))
+            + len(self.volume_issues.get("non_finite", []))
+        )
+        if volume_issue_count:
+            reasons.append(f"異常出来高 {volume_issue_count}件")
+        if self.review_count:
+            reasons.append(f"営業日欠損の可能性 {self.review_count}件")
+        return reasons
+
     def to_dict(self) -> dict:
         """辞書化する。入れ子のリスト・辞書は複製して返すため、戻り値を
         変更してもレポート内部の状態には影響しない。"""
