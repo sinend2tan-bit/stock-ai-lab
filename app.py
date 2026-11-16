@@ -225,6 +225,7 @@ def show_data_quality(raw, symbol):
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
+    return not blocking_reasons
 
 
 def _regime_at(indicators, base_date):
