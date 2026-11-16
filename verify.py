@@ -19,8 +19,9 @@ from datetime import datetime
 import pandas as pd
 
 import analysis
+import data_quality
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2
 
 VERIFY_SYMBOLS = [
     "7203.T", "6758.T", "8306.T", "9984.T",
@@ -123,6 +124,28 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         exclusions.append({
             "銘柄": symbol, "時間軸": "全体",
             "理由": "データ取得に失敗したため、この銘柄は検証対象外",
+            "件数": 1,
+        })
+        return records, exclusions
+
+    # 検証結果の母集団を汚染しないよう、価格系列の品質を評価前に確認する。
+    # 取得経路で dropna 済みの場合も attrs の除外数を引き継いで判定する。
+    try:
+        market = analysis.market_of(symbol)
+        quality = data_quality.diagnose_history(
+            raw,
+            market=market,
+            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+        )
+        dropped_rows = int(raw.attrs.get("rows_dropped_by_dropna", 0) or 0)
+        quality_blocks = quality.blocking_reasons(dropped_rows=dropped_rows)
+    except Exception as exc:
+        quality_blocks = [f"データ品質診断不能（{type(exc).__name__}）"]
+    if quality_blocks:
+        exclusions.append({
+            "銘柄": symbol,
+            "時間軸": "全体",
+            "理由": "データ品質ゲートで検証対象外：" + " / ".join(quality_blocks),
             "件数": 1,
         })
         return records, exclusions
