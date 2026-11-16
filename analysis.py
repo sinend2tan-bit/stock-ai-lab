@@ -150,6 +150,15 @@ def _split_raw_clean(df, symbol=None):
             )
             normalized = {}
             ticker_levels = [level for level in levels if level != price_level]
+            if symbol and ticker_levels:
+                wanted = str(symbol).strip().upper()
+                symbol_found = any(
+                    str(value).strip().upper() == wanted
+                    for ticker_level in ticker_levels
+                    for value in work.columns.get_level_values(ticker_level)
+                )
+                if not symbol_found:
+                    raise ValueError(f"対象銘柄 {symbol} が取得データにありません")
             for field in NEEDED_COLUMNS:
                 positions = [
                     pos for pos, column in enumerate(work.columns)
