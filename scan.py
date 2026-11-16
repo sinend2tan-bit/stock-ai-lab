@@ -200,9 +200,27 @@ def _data_quality_assessment(df, symbol):
         blocks.append(f"必須OHLCV欠損により{dropped_rows}行を除外")
     if report.rows_with_missing:
         blocks.append(f"未処理の欠損行 {report.rows_with_missing}行")
+    if report.missing_columns:
+        blocks.append(f"必須列欠落 {len(report.missing_columns)}列")
+    if report.nat_count:
+        blocks.append(f"日付不正 {report.nat_count}行")
+    if report.duplicate_row_count:
+        blocks.append(f"重複日付に関係する行 {report.duplicate_row_count}行")
+    if report.out_of_order:
+        blocks.append(f"日付順序逆転 {len(report.out_of_order)}件")
+    if report.future_dates:
+        blocks.append(f"未来日付 {len(report.future_dates)}件")
+    price_issue_count = sum(len(items) for items in report.price_issues.values())
+    volume_issue_count = (
+        len(report.volume_issues.get("negative", []))
+        + len(report.volume_issues.get("non_finite", []))
+    )
+    if price_issue_count:
+        blocks.append(f"OHLC価格異常 {price_issue_count}件")
+    if volume_issue_count:
+        blocks.append(f"異常出来高 {volume_issue_count}件")
     if report.anomaly_count:
         warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
-        blocks.append(f"構造・価格・出来高の異常候補 {report.anomaly_count}件")
     if report.warning_count:
         warnings.append(f"出来高ゼロの警告候補 {report.warning_count}件")
     if report.review_count:
