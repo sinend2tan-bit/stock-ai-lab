@@ -346,43 +346,47 @@ with tab_detail:
             else:
                 df = analysis.add_indicators(clean_hist)
                 show_freshness(df, selected_symbol)
-                latest = df.iloc[-1]
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
-                c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
-                c3.metric("EMA20", f"{latest['EMA20']:.3f}")
-                c4.metric("データ最終日", str(df.index[-1].date()))
-                fig = go.Figure()
-                fig.add_trace(go.Candlestick(
-                    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
-                ))
-                fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
-                fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
-                fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
-                fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-                st.plotly_chart(fig, width="stretch")
-                results = analysis.assess_all(df)
-                cols = st.columns(3)
-                for col, horizon in zip(cols, ["短期", "中期", "長期"]):
-                    result = results[horizon]
-                    with col:
-                        st.markdown(f"**{horizon}の条件評価**")
-                        if result["available"]:
-                            st.metric("条件スコア", result["score"])
-                        else:
-                            st.metric("条件スコア", "—")
-                        st.write(result["label"])
-                        for reason in result["reasons"]:
-                            st.write(f"• {reason}")
-                        for warning in result["warnings"]:
-                            st.warning(warning)
-                st.download_button(
-                    "分析データをCSVで保存",
-                    data=df.to_csv(index=True).encode("utf-8-sig"),
-                    file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
-                    mime="text/csv",
-                )
-                st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
+                freshness = show_freshness(df, selected_symbol)
+                if freshness["status"] == "stale":
+                    st.error("最新データが古いため、テクニカルスコア・判定を保留します。")
+                else:
+                    latest = df.iloc[-1]
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
+                    c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
+                    c3.metric("EMA20", f"{latest['EMA20']:.3f}")
+                    c4.metric("データ最終日", str(df.index[-1].date()))
+                    fig = go.Figure()
+                    fig.add_trace(go.Candlestick(
+                        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
+                    ))
+                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
+                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
+                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
+                    fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                    st.plotly_chart(fig, width="stretch")
+                    results = analysis.assess_all(df)
+                    cols = st.columns(3)
+                    for col, horizon in zip(cols, ["短期", "中期", "長期"]):
+                        result = results[horizon]
+                        with col:
+                            st.markdown(f"**{horizon}の条件評価**")
+                            if result["available"]:
+                                st.metric("条件スコア", result["score"])
+                            else:
+                                st.metric("条件スコア", "—")
+                            st.write(result["label"])
+                            for reason in result["reasons"]:
+                                st.write(f"• {reason}")
+                            for warning in result["warnings"]:
+                                st.warning(warning)
+                    st.download_button(
+                        "分析データをCSVで保存",
+                        data=df.to_csv(index=True).encode("utf-8-sig"),
+                        file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
+                        mime="text/csv",
+                    )
+                    st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
 
 with tab_journal:
     st.subheader("仮想売買メモ")
