@@ -111,22 +111,18 @@ SCAN_COLUMNS = [
 ]
 
 
-def _shape(df):
-    """一括取得の結果を、analysis.fetch_history と同じ形に整える。"""
+def _shape(df, symbol=None):
+    """一括取得の結果を、個別取得と同じOHLCV正規化で整える。"""
     if df is None or df.empty:
         return pd.DataFrame()
     try:
-        out = df.copy()
-        if isinstance(out.columns, pd.MultiIndex):
-            out.columns = out.columns.get_level_values(0)
-        if not all(c in out.columns for c in analysis.NEEDED_COLUMNS):
-            return pd.DataFrame()
-        raw = out[analysis.NEEDED_COLUMNS].copy()
-        clean = raw.dropna().copy()
-        # Preserve a display-only count; the cleaned values and row order stay
-        # exactly the same as the previous dropna() result.
-        clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
-        clean.attrs["raw_row_count"] = len(raw)
+        raw, clean, error = analysis._split_raw_clean(df, symbol=symbol)
+        if error:
+            # Keep diagnostic metadata even when every row is excluded by dropna().
+            if raw is not None and not raw.empty:
+                clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
+                clean.attrs["raw_row_count"] = len(raw)
+            return clean
         return clean
     except Exception:
         return pd.DataFrame()
@@ -157,7 +153,7 @@ def fetch_batch(symbols, period=SCAN_PERIOD):
                     sub = data[sym] if len(chunk) > 1 else data
                 except Exception:
                     sub = pd.DataFrame()
-                shaped = _shape(sub)
+                shaped = _shape(sub, symbol=sym)
                 if shaped.empty:
                     # Preserve the dropna count even when no usable rows remain.
                     results[sym] = (shaped, "一括取得でデータが取れませんでした")

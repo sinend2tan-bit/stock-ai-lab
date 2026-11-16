@@ -130,22 +130,84 @@ def _download_history(symbol, period):
     return df, last_error
 
 
-def _split_raw_clean(df):
+def _split_raw_clean(df, symbol=None):
     """取得直後データから (raw, clean, error) を作る。引数の df は変更しない。
 
-    - raw: 必要列をそろえた取得直後データ。欠損行を保持する（品質診断用）。
-    - clean: raw に従来どおり dropna() を適用した分析用データ。
-    - 必要列が欠けている場合は (raw, 空, 理由)。raw には、存在する
-      必要列だけが入る（欠けた列は診断で「必須列欠落」として見える）。
-    - clean が空（欠損のみ）の場合は (raw, 空, 理由)。
-    - 整形で例外が起きた場合は (空, 空, 理由)。
+    yfinance の MultiIndex は Price/Ticker の順序が一定とは限らない。
+    OHLCV名を含むレベルを価格レベルとして特定し、symbol が指定されて
+    いれば該当Ticker列だけを選ぶ。重複列を黙って分析に流さない。
     """
     try:
         work = df.copy()
         if isinstance(work.columns, pd.MultiIndex):
-            work.columns = work.columns.get_level_values(0)
-        present = [c for c in NEEDED_COLUMNS if c in work.columns]
-        raw = work[present].copy()
+            levels = range(work.columns.nlevels)
+            level_scores = {
+                level: sum(
+                    value in NEEDED_COLUMNS
+                    for value in work.columns.get_level_values(level)
+                )
+                for level in levels
+            }
+            best_score = max(level_scores.values(), default=0)
+            best_levels = [
+                level for level, score in level_scores.items()
+                if score == best_score and score > 0
+            ]
+            if len(best_levels) != 1:
+                raise ValueError(
+                    "価格列（OHLCV）を含むMultiIndexの階層を一意に特定できません"
+                )
+            price_level = best_levels[0]
+            normalized = {}
+            ticker_levels = [level for level in levels if level != price_level]
+            if symbol and ticker_levels:
+                wanted = str(symbol).strip().upper()
+                symbol_found = any(
+                    str(value).strip().upper() == wanted
+                    for ticker_level in ticker_levels
+                    for value in work.columns.get_level_values(ticker_level)
+                )
+                if not symbol_found:
+                    raise ValueError(f"対象銘柄 {symbol} が取得データにありません")
+            for field in NEEDED_COLUMNS:
+                positions = [
+                    pos for pos, column in enumerate(work.columns)
+                    if column[price_level] == field
+                ]
+                if symbol and ticker_levels:
+                    wanted = str(symbol).strip().upper()
+                    matched = False
+                    for ticker_level in ticker_levels:
+                        matches = [
+                            pos for pos in positions
+                            if str(work.columns[pos][ticker_level]).strip().upper() == wanted
+                        ]
+                        if matches:
+                            positions = matches
+                            matched = True
+                            break
+                    if not matched:
+                        # Never borrow a field from another ticker merely because
+                        # the requested ticker's corresponding column is absent.
+                        positions = []
+                if len(positions) == 1:
+                    normalized[field] = work.iloc[:, positions[0]]
+                elif len(positions) > 1:
+                    raise ValueError(
+                        f"{field}列が複数銘柄分あり、対象銘柄 {symbol or '未指定'} を一意に選べません"
+                    )
+            raw = pd.DataFrame(normalized, index=work.index)
+        else:
+            present = [c for c in NEEDED_COLUMNS if c in work.columns]
+            raw = work[present].copy()
+            duplicates = [
+                field for field in present
+                if int((work.columns == field).sum()) > 1
+            ]
+            if duplicates:
+                raise ValueError("取得データに重複した価格列があります: " + ", ".join(duplicates))
+        present = [c for c in NEEDED_COLUMNS if c in raw.columns]
+        raw = raw[present].copy()
         if len(present) < len(NEEDED_COLUMNS):
             return raw, pd.DataFrame(), "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
         clean = raw.dropna().copy()
@@ -177,7 +239,7 @@ def fetch_history_bundle(symbol, period="2y"):
         return pd.DataFrame(), pd.DataFrame(), last_error
     if df is None or df.empty:
         return pd.DataFrame(), pd.DataFrame(), "データが取得できませんでした。銘柄コードの誤り、または提供側でデータがない可能性があります。"
-    return _split_raw_clean(df)
+    return _split_raw_clean(df, symbol=symbol)
 
 
 def fetch_history(symbol, period="2y"):
