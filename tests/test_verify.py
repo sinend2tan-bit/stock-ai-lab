@@ -304,3 +304,58 @@ def test_repeated_csv_import_does_not_grow_records_or_exclusions():
         session_exclusions = verify.merge_exclusions(session_exclusions, loaded_ex)
     assert len(session_records) == len(records)
     assert session_exclusions == exclusions
+
+
+# --- データ品質ゲート（検証結果の母集団保護） ---
+
+
+def test_verify_excludes_ohlc_anomaly_before_scoring():
+    frame = rising_frame(400)
+    frame.iloc[-1, frame.columns.get_loc("High")] = frame.iloc[-1]["Close"] * 0.5
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="quality")
+    assert records == []
+    assert len(exclusions) == 1
+    assert exclusions[0]["時間軸"] == "全体"
+    assert "OHLC価格異常" in exclusions[0]["理由"]
+
+
+def test_verify_excludes_unresolved_market_day_gap():
+    dates = pd.bdate_range(start="2024-01-02", periods=400)
+    frame = make_frame([100.0 + i * 0.1 for i in range(len(dates))])
+    frame.index = dates
+    missing_day = pd.Timestamp("2024-01-11")
+    frame = frame.drop(index=missing_day)
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="gap")
+    assert records == []
+    assert len(exclusions) == 1
+    assert "営業日欠損の可能性" in exclusions[0]["理由"]
+
+
+def test_verify_keeps_zero_volume_warning_only():
+    frame = rising_frame(400)
+    frame.iloc[-1, frame.columns.get_loc("Volume")] = 0
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="zero-volume")
+    assert records
+    assert exclusions == []
+
+
+def test_verify_excludes_data_with_dropped_ohlcv_rows():
+    frame = rising_frame(400)
+    frame.attrs["rows_dropped_by_dropna"] = 2
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="dropped-rows")
+    assert records == []
+    assert len(exclusions) == 1
+    assert "必須OHLCV欠損 2行" in exclusions[0]["理由"]
+
+
+def test_verify_diagnostic_failure_is_excluded(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("diagnostic unavailable")
+
+    monkeypatch.setattr(verify.data_quality, "diagnose_history", fail)
+    records, exclusions = verify.verify_symbol(
+        "7203.T", rising_frame(400), run_at="diagnostic-failure"
+    )
+    assert records == []
+    assert len(exclusions) == 1
+    assert "データ品質診断不能" in exclusions[0]["理由"]
