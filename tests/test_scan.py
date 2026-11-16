@@ -138,7 +138,7 @@ def test_stale_data_goes_to_excluded():
     assert "古い可能性" in excluded[0]["警告・理由"]
 
 
-def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
+def test_scan_excludes_ohlc_anomaly_before_ranking():
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("High")] = (
         frame.iloc[-1]["Close"] * 0.5
@@ -148,11 +148,64 @@ def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
         universe,
         lambda syms: {"BADPRICE.T": (frame, None)},
         lambda symbol: (frame, None),
-        run_at="quality-warning-test",
+        run_at="quality-gate-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "データ品質ゲートで除外" in excluded[0]["警告・理由"]
+    assert "構造・価格・出来高の異常候補" in excluded[0]["警告・理由"]
+
+
+def test_scan_keeps_zero_volume_as_warning_only():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Volume")] = 0
+    universe = [("ZEROVOL.T", "出来高ゼロ社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"ZEROVOL.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="zero-volume-warning-test",
     )
     assert len(ranked) == 1
     assert excluded == []
-    assert "データ品質の異常候補" in ranked[0]["警告・理由"]
+    assert "出来高ゼロの警告候補" in ranked[0]["警告・理由"]
+
+
+def test_scan_excludes_unresolved_trading_day_gap():
+    dates = pd.to_datetime(["2026-11-02", "2026-11-05"])
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0], "High": [101.0, 102.0],
+            "Low": [99.0, 100.0], "Close": [100.5, 101.5],
+            "Volume": [1000, 1100],
+        },
+        index=dates,
+    )
+    universe = [("GAP.T", "欠損疑い社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"GAP.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="gap-gate-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "営業日欠損の可能性" in excluded[0]["警告・理由"]
+
+
+def test_scan_excludes_unprocessed_missing_ohlcv_rows():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
+    universe = [("RAWNA.T", "未処理欠損社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"RAWNA.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="raw-missing-gate-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "未処理の欠損行" in excluded[0]["警告・理由"]
 
 
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
