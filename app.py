@@ -348,42 +348,42 @@ with tab_detail:
                 st.error("最新データが古いため、テクニカルスコア・判定を保留します。")
             else:
                 latest = df.iloc[-1]
-                    c1, c2, c3, c4 = st.columns(4)
-                    c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
-                    c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
-                    c3.metric("EMA20", f"{latest['EMA20']:.3f}")
-                    c4.metric("データ最終日", str(df.index[-1].date()))
-                    fig = go.Figure()
-                    fig.add_trace(go.Candlestick(
-                        x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
-                    ))
-                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
-                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
-                    fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
-                    fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-                    st.plotly_chart(fig, width="stretch")
-                    results = analysis.assess_all(df)
-                    cols = st.columns(3)
-                    for col, horizon in zip(cols, ["短期", "中期", "長期"]):
-                        result = results[horizon]
-                        with col:
-                            st.markdown(f"**{horizon}の条件評価**")
-                            if result["available"]:
-                                st.metric("条件スコア", result["score"])
-                            else:
-                                st.metric("条件スコア", "—")
-                            st.write(result["label"])
-                            for reason in result["reasons"]:
-                                st.write(f"• {reason}")
-                            for warning in result["warnings"]:
-                                st.warning(warning)
-                    st.download_button(
-                        "分析データをCSVで保存",
-                        data=df.to_csv(index=True).encode("utf-8-sig"),
-                        file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
-                        mime="text/csv",
-                    )
-                    st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
+                c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
+                c3.metric("EMA20", f"{latest['EMA20']:.3f}")
+                c4.metric("データ最終日", str(df.index[-1].date()))
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
+                ))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, width="stretch")
+                results = analysis.assess_all(df)
+                cols = st.columns(3)
+                for col, horizon in zip(cols, ["短期", "中期", "長期"]):
+                    result = results[horizon]
+                    with col:
+                        st.markdown(f"**{horizon}の条件評価**")
+                        if result["available"]:
+                            st.metric("条件スコア", result["score"])
+                        else:
+                            st.metric("条件スコア", "—")
+                        st.write(result["label"])
+                        for reason in result["reasons"]:
+                            st.write(f"• {reason}")
+                        for warning in result["warnings"]:
+                            st.warning(warning)
+                st.download_button(
+                    "分析データをCSVで保存",
+                    data=df.to_csv(index=True).encode("utf-8-sig"),
+                    file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
+                    mime="text/csv",
+                )
+                st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
 
 with tab_journal:
     st.subheader("仮想売買メモ")
@@ -561,7 +561,7 @@ with tab_verify:
         for row in summary["時間軸別"]:
             if row["精度判断"].startswith("件数不足"):
                 st.warning(
-                    f"{row['時間軸']}は的中・不的中の合計が {row['判定件数']} 件のため、精度を判断できません。"
+                f"{row['時間軸']}は的中・不的中の合計が {row['判定件数']} 件のため、精度を判断できません。"
                 )
         if summary["実際方向別内訳"]:
             st.markdown("**実際に上昇・下落した場面での予測内訳（見逃しの把握用）**")
@@ -573,8 +573,8 @@ with tab_verify:
         if v_records:
             with st.expander(f"検証記録の明細（{len(v_records)}件）"):
                 st.dataframe(
-                    pd.DataFrame(v_records, columns=verify.RECORD_COLUMNS),
-                    width="stretch", hide_index=True,
+                pd.DataFrame(v_records, columns=verify.RECORD_COLUMNS),
+                width="stretch", hide_index=True,
                 )
             st.download_button(
                 "検証記録をCSVで保存",
@@ -637,7 +637,7 @@ with tab_scan:
             batch = get_batch(tuple(syms), scan.SCAN_PERIOD)
             for sym, (df, err) in batch.items():
                 if err is None and df is not None and not df.empty:
-                    captured_frames[sym] = df.copy()
+                captured_frames[sym] = df.copy()
             return batch
 
         def single_fetcher(symbol):
@@ -756,12 +756,12 @@ with tab_scan:
             with st.spinner("V1・V2の両方で登録しています。"):
                 benchmarks = {}
                 for b_symbol in (forward.NIKKEI_SYMBOL, forward.TOPIX_PROXY_SYMBOL):
-                    b_df, b_err = analysis.fetch_history(b_symbol, "3mo")
-                    if b_err is None and b_df is not None and not b_df.empty:
-                        benchmarks[b_symbol] = (
-                            round(float(b_df["Close"].iloc[-1]), 3),
-                            pd.Timestamp(b_df.index[-1]).date().isoformat(),
-                        )
+                b_df, b_err = analysis.fetch_history(b_symbol, "3mo")
+                if b_err is None and b_df is not None and not b_df.empty:
+                    benchmarks[b_symbol] = (
+                        round(float(b_df["Close"].iloc[-1]), 3),
+                        pd.Timestamp(b_df.index[-1]).date().isoformat(),
+                    )
                 ranked = st.session_state.scan_ranked
                 excluded = st.session_state.scan_excluded
                 meta = st.session_state.scan_meta
@@ -772,50 +772,50 @@ with tab_scan:
                 frames = st.session_state.get("scan_frames") or {}
                 assessments, failed, fallback_codes = {}, {}, set()
                 for row in list(ranked) + list(excluded):
-                    code = row["コード"]
-                    if code in frames:
-                        ind = analysis.add_indicators(frames[code])
-                        assessments[code] = {
-                            "results": scoring_v2.assess_all_v2(ind),
-                            "overheat": scoring_v2.overheat_flag(ind),
-                        }
-                    elif row.get("データ最終日"):
-                        raw, err = analysis.fetch_history(code, scan.SCAN_PERIOD)
-                        if err is not None or raw is None or raw.empty:
-                            failed[code] = f"V2再取得に失敗しました：{err or 'データなし'}"
+                code = row["コード"]
+                if code in frames:
+                    ind = analysis.add_indicators(frames[code])
+                    assessments[code] = {
+                        "results": scoring_v2.assess_all_v2(ind),
+                        "overheat": scoring_v2.overheat_flag(ind),
+                    }
+                elif row.get("データ最終日"):
+                    raw, err = analysis.fetch_history(code, scan.SCAN_PERIOD)
+                    if err is not None or raw is None or raw.empty:
+                        failed[code] = f"V2再取得に失敗しました：{err or 'データなし'}"
+                    else:
+                        checked, reason = forward.prepare_v2_frame(
+                            raw, row.get("データ最終日"), row.get("終値")
+                        )
+                        if checked is None:
+                            failed[code] = reason
                         else:
-                            checked, reason = forward.prepare_v2_frame(
-                                raw, row.get("データ最終日"), row.get("終値")
-                            )
-                            if checked is None:
-                                failed[code] = reason
-                            else:
-                                ind = analysis.add_indicators(checked)
-                                assessments[code] = {
-                                    "results": scoring_v2.assess_all_v2(ind),
-                                    "overheat": scoring_v2.overheat_flag(ind),
-                                }
-                                fallback_codes.add(code)
-                    # データ最終日がない銘柄（取得失敗）は、build_v2_scan_rows が
-                    # 理由つきで未登録（skipped）として返す
+                            ind = analysis.add_indicators(checked)
+                            assessments[code] = {
+                                "results": scoring_v2.assess_all_v2(ind),
+                                "overheat": scoring_v2.overheat_flag(ind),
+                            }
+                            fallback_codes.add(code)
+                # データ最終日がない銘柄（取得失敗）は、build_v2_scan_rows が
+                # 理由つきで未登録（skipped）として返す
                 ranked_v2, excluded_v2, overheat_flags, skipped = (
-                    forward.build_v2_scan_rows(ranked, excluded, assessments, failed)
+                forward.build_v2_scan_rows(ranked, excluded, assessments, failed)
                 )
                 for row in ranked_v2 + excluded_v2:
-                    if row["コード"] in fallback_codes:
-                        note = forward.FALLBACK_NOTE
-                        row["警告・理由"] = (
-                            (row["警告・理由"] + " / " + note) if row["警告・理由"] else note
-                        )
+                if row["コード"] in fallback_codes:
+                    note = forward.FALLBACK_NOTE
+                    row["警告・理由"] = (
+                        (row["警告・理由"] + " / " + note) if row["警告・理由"] else note
+                    )
                 v2_records = forward.build_records(
-                    ranked_v2, excluded_v2, meta, benchmarks,
-                    scoring_version=2,
-                    direction_fn=scoring_v2.direction_from_score_v2,
-                    overheat_flags=overheat_flags,
+                ranked_v2, excluded_v2, meta, benchmarks,
+                scoring_version=2,
+                direction_fn=scoring_v2.direction_from_score_v2,
+                overheat_flags=overheat_flags,
                 )
 
                 merged, conflicts1 = forward.merge_records(
-                    st.session_state.fwd_records, v1_records
+                st.session_state.fwd_records, v1_records
                 )
                 added_v1 = len(merged) - len(st.session_state.fwd_records)
                 merged, conflicts2 = forward.merge_records(merged, v2_records)
@@ -824,34 +824,34 @@ with tab_scan:
                 st.session_state.fwd_records = merged
                 st.session_state.fwd_conflicts = conflicts
                 if added_v1 or added_v2:
-                    st.session_state.fwd_records_unsaved = True
+                st.session_state.fwd_records_unsaved = True
                 if skipped:
-                    new_skipped = [
-                        {"スキャンID": meta["実行日時"], "コード": s["コード"], "理由": s["理由"]}
-                        for s in skipped
-                    ]
-                    before_skipped = len(st.session_state.fwd_v2_skipped)
-                    st.session_state.fwd_v2_skipped = forward.merge_skipped(
-                        st.session_state.fwd_v2_skipped, new_skipped
-                    )
-                    if len(st.session_state.fwd_v2_skipped) > before_skipped:
-                        st.session_state.fwd_v2_skipped_unsaved = True
+                new_skipped = [
+                    {"スキャンID": meta["実行日時"], "コード": s["コード"], "理由": s["理由"]}
+                    for s in skipped
+                ]
+                before_skipped = len(st.session_state.fwd_v2_skipped)
+                st.session_state.fwd_v2_skipped = forward.merge_skipped(
+                    st.session_state.fwd_v2_skipped, new_skipped
+                )
+                if len(st.session_state.fwd_v2_skipped) > before_skipped:
+                    st.session_state.fwd_v2_skipped_unsaved = True
                 note_text = (
-                    f"フォワード登録：V1 {added_v1} 件・V2 {added_v2} 件を追加しました"
-                    f"（重複 V1 {len(v1_records) - added_v1 - len(conflicts1)} 件・"
-                    f"V2 {len(v2_records) - added_v2 - len(conflicts2)} 件、"
-                    f"競合 {len(conflicts)} 件）。"
+                f"フォワード登録：V1 {added_v1} 件・V2 {added_v2} 件を追加しました"
+                f"（重複 V1 {len(v1_records) - added_v1 - len(conflicts1)} 件・"
+                f"V2 {len(v2_records) - added_v2 - len(conflicts2)} 件、"
+                f"競合 {len(conflicts)} 件）。"
                 )
                 if skipped:
-                    note_text += (
-                        f"V2で計算できなかった銘柄が {len(skipped)} 件あります"
-                        "（V2未登録として扱い、理由は下の「V2未登録の理由」に残しました）。"
-                    )
+                note_text += (
+                    f"V2で計算できなかった銘柄が {len(skipped)} 件あります"
+                    "（V2未登録として扱い、理由は下の「V2未登録の理由」に残しました）。"
+                )
                 if fallback_codes:
-                    note_text += (
-                        f"V2のうち {len(fallback_codes)} 件は、スキャン時のデータの控えが"
-                        "なかったため再取得データ（基準日検査済み）で計算しました。"
-                    )
+                note_text += (
+                    f"V2のうち {len(fallback_codes)} 件は、スキャン時のデータの控えが"
+                    "なかったため再取得データ（基準日検査済み）で計算しました。"
+                )
                 st.session_state.fwd_register_note = note_text
             # 未保存の警告を同じ表示で出すため、メッセージを残して再描画する
             st.rerun()
@@ -944,12 +944,12 @@ with tab_scan:
 
             def fwd_fetcher(symbol):
                 if symbol in batch:
-                    return batch[symbol]
+                return batch[symbol]
                 return analysis.fetch_history(symbol, scan.SCAN_PERIOD)
 
             with st.spinner("評価データを取得しています。"):
                 new_results, pending, failed = forward.evaluate_records(
-                    fwd_records, fwd_fetcher
+                fwd_records, fwd_fetcher
                 )
             before = len(st.session_state.fwd_results)
             merged, conflicts = forward.merge_results(
@@ -969,8 +969,8 @@ with tab_scan:
             ]
             if pending:
                 notes.append(
-                    f"まだ評価時点に到達していないものが {len(pending)} 件あります。"
-                    "到達後に再度「事後評価を実行」を押してください。"
+                f"まだ評価時点に到達していないものが {len(pending)} 件あります。"
+                "到達後に再度「事後評価を実行」を押してください。"
                 )
             for item in failed:
                 notes.append(f"取得失敗：{item['コード']}（{item['理由']}）")
@@ -1028,10 +1028,10 @@ with tab_scan:
             band_rows = []
             for n, band_map in summary["順位帯別"].items():
                 for band_name in ("上位5", "上位10", "上位20", "全体"):
-                    if band_name in band_map:
-                        band_rows.append(
-                            {"評価営業日数": n, "順位帯": band_name, **band_map[band_name]}
-                        )
+                if band_name in band_map:
+                    band_rows.append(
+                        {"評価営業日数": n, "順位帯": band_name, **band_map[band_name]}
+                    )
             band_df = pd.DataFrame(band_rows)
             band_df = band_df.astype(object).where(pd.notna(band_df), None)
             st.dataframe(band_df, width="stretch", hide_index=True)
@@ -1040,7 +1040,7 @@ with tab_scan:
             horizon_rows = [
                 {"評価営業日数": n, "時間軸": horizon, **vals}
                 for (n, horizon), vals in sorted(
-                    summary["時間軸別"].items(), key=lambda kv: (kv[0][0], kv[0][1])
+                summary["時間軸別"].items(), key=lambda kv: (kv[0][0], kv[0][1])
                 )
             ]
             horizon_df = pd.DataFrame(horizon_rows)
@@ -1060,210 +1060,210 @@ with tab_scan:
         with st.expander("V1・V2比較（新仕様の並行評価）"):
             if _version_count(fwd_records, 2) == 0:
                 st.info(
-                    "V2の登録がまだありません。スキャン結果をフォワード登録すると、"
-                    "V1とV2の両方で記録されます。"
+                "V2の登録がまだありません。スキャン結果をフォワード登録すると、"
+                "V1とV2の両方で記録されます。"
                 )
             else:
                 # 地合い（採用ゲート用）：日経平均の基準日時点の状態をスキャンごとに求める
                 regime_by_scan = None
                 nikkei_df, nikkei_err = get_history(forward.NIKKEI_SYMBOL, "2y")
                 if nikkei_err is None and nikkei_df is not None and not nikkei_df.empty:
-                    nikkei_ind = analysis.add_indicators(nikkei_df)
-                    regime_by_scan = {}
-                    for r in fwd_records:
-                        scan_id = r["スキャンID"]
-                        if scan_id not in regime_by_scan:
-                            regime_by_scan[scan_id] = _regime_at(
-                                nikkei_ind, r.get("株価基準日", "")
-                            )
+                nikkei_ind = analysis.add_indicators(nikkei_df)
+                regime_by_scan = {}
+                for r in fwd_records:
+                    scan_id = r["スキャンID"]
+                    if scan_id not in regime_by_scan:
+                        regime_by_scan[scan_id] = _regime_at(
+                            nikkei_ind, r.get("株価基準日", "")
+                        )
                 comp = forward.compare_versions(
-                    st.session_state.fwd_results, fwd_records,
-                    regime_by_scan=regime_by_scan,
+                st.session_state.fwd_results, fwd_records,
+                regime_by_scan=regime_by_scan,
                 )
                 st.caption(
-                    "これは方向判定を仮想的な建玉として評価する比較で、実際の売買損益ではありません。"
-                    "V1の下落側は空売りを含む仮想評価であり、実際に利用可能な売買方法とは区別してください。"
-                    "V2は並行評価中です。この画面は情報表示のみで、仕様を自動で切り替えることはありません。"
+                "これは方向判定を仮想的な建玉として評価する比較で、実際の売買損益ではありません。"
+                "V1の下落側は空売りを含む仮想評価であり、実際に利用可能な売買方法とは区別してください。"
+                "V2は並行評価中です。この画面は情報表示のみで、仕様を自動で切り替えることはありません。"
                 )
                 pending_total = sum(comp["評価待ち"].values())
                 if pending_total:
-                    st.write(
-                        f"評価待ち：{pending_total} 件"
-                        "（評価時点に到達したら「事後評価を実行」を押してください）"
-                    )
+                st.write(
+                    f"評価待ち：{pending_total} 件"
+                    "（評価時点に到達したら「事後評価を実行」を押してください）"
+                )
                 one_sided = comp["片側登録件数"]
                 if one_sided["V1のみ"] or one_sided["V2のみ"]:
-                    st.write(
-                        f"片側登録：V1のみ {one_sided['V1のみ']} 件・V2のみ {one_sided['V2のみ']} 件"
-                        "（両版そろっていないため、比較の対象外です）"
+                st.write(
+                    f"片側登録：V1のみ {one_sided['V1のみ']} 件・V2のみ {one_sided['V2のみ']} 件"
+                    "（両版そろっていないため、比較の対象外です）"
+                )
+                with st.expander("片側登録の明細（理由つき）"):
+                    st.dataframe(
+                        pd.DataFrame(comp["片側登録"]),
+                        width="stretch", hide_index=True,
                     )
-                    with st.expander("片側登録の明細（理由つき）"):
-                        st.dataframe(
-                            pd.DataFrame(comp["片側登録"]),
-                            width="stretch", hide_index=True,
-                        )
                 for version, label in ((1, "V1（現行仕様）"), (2, "V2（新仕様）")):
-                    v_summary = forward.summarize(
-                        st.session_state.fwd_results, fwd_records, version=version
+                v_summary = forward.summarize(
+                    st.session_state.fwd_results, fwd_records, version=version
+                )
+                if v_summary["時点別"]:
+                    st.markdown(f"**{label}の時点別の成績**")
+                    v_df = pd.DataFrame(
+                        [
+                            {"評価営業日数": n, **vals}
+                            for n, vals in v_summary["時点別"].items()
+                        ]
                     )
-                    if v_summary["時点別"]:
-                        st.markdown(f"**{label}の時点別の成績**")
-                        v_df = pd.DataFrame(
-                            [
-                                {"評価営業日数": n, **vals}
-                                for n, vals in v_summary["時点別"].items()
-                            ]
-                        )
-                        v_df = v_df.astype(object).where(pd.notna(v_df), None)
-                        st.dataframe(v_df, width="stretch", hide_index=True)
+                    v_df = v_df.astype(object).where(pd.notna(v_df), None)
+                    st.dataframe(v_df, width="stretch", hide_index=True)
                 if comp["共通母集団"]:
-                    st.markdown("**予測性能比較（両版とも方向判定した共通母集団）**")
-                    common_rows = [
-                        {"評価営業日数": n, "時間軸": h, **vals}
-                        for (n, h), vals in sorted(
-                            comp["共通母集団"].items(), key=lambda kv: (kv[0][0], kv[0][1])
-                        )
-                        if vals["件数"]
-                    ]
-                    if common_rows:
-                        common_df = pd.DataFrame(common_rows)
-                        common_df = common_df.astype(object).where(
-                            pd.notna(common_df), None
-                        )
-                        st.dataframe(common_df, width="stretch", hide_index=True)
-                    st.caption(
-                        "V2の方向判定は「上昇」のみのため、共通母集団ではV2の的中率は"
-                        "常時上昇と一致します。実質的な差は「ペア差分平均TOPIX超過pct」で見てください。"
+                st.markdown("**予測性能比較（両版とも方向判定した共通母集団）**")
+                common_rows = [
+                    {"評価営業日数": n, "時間軸": h, **vals}
+                    for (n, h), vals in sorted(
+                        comp["共通母集団"].items(), key=lambda kv: (kv[0][0], kv[0][1])
                     )
+                    if vals["件数"]
+                ]
+                if common_rows:
+                    common_df = pd.DataFrame(common_rows)
+                    common_df = common_df.astype(object).where(
+                        pd.notna(common_df), None
+                    )
+                    st.dataframe(common_df, width="stretch", hide_index=True)
+                st.caption(
+                    "V2の方向判定は「上昇」のみのため、共通母集団ではV2の的中率は"
+                    "常時上昇と一致します。実質的な差は「ペア差分平均TOPIX超過pct」で見てください。"
+                )
                 caution = forward.caution_reference(
-                    st.session_state.fwd_results, fwd_records
+                st.session_state.fwd_results, fwd_records
                 )
                 if caution:
-                    st.markdown("**V2「下落注意」の参考グループ（的中率には含めません）**")
-                    caution_rows = [
-                        {"評価営業日数": n, "時間軸": h, **vals}
-                        for (n, h), vals in sorted(
-                            caution.items(), key=lambda kv: (kv[0][0], kv[0][1])
-                        )
-                    ]
-                    caution_df = pd.DataFrame(caution_rows)
-                    caution_df = caution_df.astype(object).where(
-                        pd.notna(caution_df), None
+                st.markdown("**V2「下落注意」の参考グループ（的中率には含めません）**")
+                caution_rows = [
+                    {"評価営業日数": n, "時間軸": h, **vals}
+                    for (n, h), vals in sorted(
+                        caution.items(), key=lambda kv: (kv[0][0], kv[0][1])
                     )
-                    st.dataframe(caution_df, width="stretch", hide_index=True)
-                    st.caption("「下落注意」にした銘柄が、その後実際にどう動いたかです。")
+                ]
+                caution_df = pd.DataFrame(caution_rows)
+                caution_df = caution_df.astype(object).where(
+                    pd.notna(caution_df), None
+                )
+                st.dataframe(caution_df, width="stretch", hide_index=True)
+                st.caption("「下落注意」にした銘柄が、その後実際にどう動いたかです。")
                 st.markdown(
-                    f"**運用判断比較（{forward.PRIMARY_HORIZON}・"
-                    f"{forward.PRIMARY_CHECKPOINT}営業日）**"
+                f"**運用判断比較（{forward.PRIMARY_HORIZON}・"
+                f"{forward.PRIMARY_CHECKPOINT}営業日）**"
                 )
                 primary_key = (forward.PRIMARY_CHECKPOINT, forward.PRIMARY_HORIZON)
                 matrix = comp["行列"].get(primary_key)
                 if matrix:
-                    matrix_rows = []
-                    for d1 in forward.V1_DIRECTIONS:
-                        row = {"V1の判定": d1}
-                        for d2 in forward.V2_DIRECTIONS:
-                            cell = matrix.get((d1, d2))
-                            row[d2] = (
-                                f"{cell['件数']}件（差分 {cell['差分合計pct']:+.1f}%）"
-                                if cell else "－"
+                matrix_rows = []
+                for d1 in forward.V1_DIRECTIONS:
+                    row = {"V1の判定": d1}
+                    for d2 in forward.V2_DIRECTIONS:
+                        cell = matrix.get((d1, d2))
+                        row[d2] = (
+                            f"{cell['件数']}件（差分 {cell['差分合計pct']:+.1f}%）"
+                            if cell else "－"
+                        )
+                    matrix_rows.append(row)
+                st.dataframe(
+                    pd.DataFrame(matrix_rows), width="stretch", hide_index=True
+                )
+                comp_info = comp["完全性"][primary_key]
+                st.caption(
+                    f"対象 {comp_info['対象件数']} 件／セル合計 {comp_info['セル合計件数']} 件／"
+                    f"未分類 {comp_info['未分類件数']} 件／件数と差分の一致："
+                    f"{'はい' if comp_info['一致'] else 'いいえ'}。"
+                    "差分はV2の仮想損益からV1の仮想損益を引いたもの（プラスはV2優位）です。"
+                    "TOPIX連動ETF超過ベースの差分は「全組み合わせ」の表にあります。"
+                )
+                with st.expander("運用判断比較の全組み合わせを見る"):
+                    all_rows = []
+                    for (n, h), cells in sorted(
+                        comp["行列"].items(), key=lambda kv: (kv[0][0], kv[0][1])
+                    ):
+                        for (d1, d2), cell in cells.items():
+                            all_rows.append(
+                                {
+                                    "評価営業日数": n, "時間軸": h,
+                                    "V1の判定": d1, "V2の判定": d2, **cell,
+                                }
                             )
-                        matrix_rows.append(row)
-                    st.dataframe(
-                        pd.DataFrame(matrix_rows), width="stretch", hide_index=True
-                    )
-                    comp_info = comp["完全性"][primary_key]
-                    st.caption(
-                        f"対象 {comp_info['対象件数']} 件／セル合計 {comp_info['セル合計件数']} 件／"
-                        f"未分類 {comp_info['未分類件数']} 件／件数と差分の一致："
-                        f"{'はい' if comp_info['一致'] else 'いいえ'}。"
-                        "差分はV2の仮想損益からV1の仮想損益を引いたもの（プラスはV2優位）です。"
-                        "TOPIX連動ETF超過ベースの差分は「全組み合わせ」の表にあります。"
-                    )
-                    with st.expander("運用判断比較の全組み合わせを見る"):
-                        all_rows = []
-                        for (n, h), cells in sorted(
-                            comp["行列"].items(), key=lambda kv: (kv[0][0], kv[0][1])
-                        ):
-                            for (d1, d2), cell in cells.items():
-                                all_rows.append(
-                                    {
-                                        "評価営業日数": n, "時間軸": h,
-                                        "V1の判定": d1, "V2の判定": d2, **cell,
-                                    }
-                                )
-                        all_df = pd.DataFrame(all_rows)
-                        all_df = all_df.astype(object).where(pd.notna(all_df), None)
-                        st.dataframe(all_df, width="stretch", hide_index=True)
+                    all_df = pd.DataFrame(all_rows)
+                    all_df = all_df.astype(object).where(pd.notna(all_df), None)
+                    st.dataframe(all_df, width="stretch", hide_index=True)
                 else:
-                    st.info(
-                        "主エンドポイント（中期・20営業日）の評価済みデータがまだありません。"
-                        "事後評価が進むと、ここに16通りの組み合わせ表が出ます。"
-                    )
+                st.info(
+                    "主エンドポイント（中期・20営業日）の評価済みデータがまだありません。"
+                    "事後評価が進むと、ここに16通りの組み合わせ表が出ます。"
+                )
                 skip = comp["見送り"].get(primary_key)
                 if skip:
-                    st.markdown("**見送りの内訳（V1が「下落」だった銘柄）**")
-                    skip_rows = [
-                        {"V2の判定": d2, **vals} for d2, vals in skip.items()
-                    ]
-                    skip_df = pd.DataFrame(skip_rows)
-                    skip_df = skip_df.astype(object).where(pd.notna(skip_df), None)
-                    st.dataframe(skip_df, width="stretch", hide_index=True)
-                    st.caption(
-                        "「下落注意」は設計どおりの見送り、「中立」「判定保留」はスコア変化による見送りです。"
-                        "回避できた下落（回避）と、見送ったことで逃した上昇（機会損失）の両方を表示します。"
-                    )
+                st.markdown("**見送りの内訳（V1が「下落」だった銘柄）**")
+                skip_rows = [
+                    {"V2の判定": d2, **vals} for d2, vals in skip.items()
+                ]
+                skip_df = pd.DataFrame(skip_rows)
+                skip_df = skip_df.astype(object).where(pd.notna(skip_df), None)
+                st.dataframe(skip_df, width="stretch", hide_index=True)
+                st.caption(
+                    "「下落注意」は設計どおりの見送り、「中立」「判定保留」はスコア変化による見送りです。"
+                    "回避できた下落（回避）と、見送ったことで逃した上昇（機会損失）の両方を表示します。"
+                )
                 gate = comp["ゲート"]
                 st.markdown("**採用ゲート（情報表示のみ）**")
                 gate_rows = []
                 for item in gate["項目"]:
-                    mark = "－" if item["判定"] is None else ("○" if item["判定"] else "×")
-                    gate_rows.append(
-                        {
-                            "項目": item["項目"], "基準": item["基準"],
-                            "実績": _format_gate_actual(item["実績"]), "判定": mark,
-                        }
-                    )
+                mark = "－" if item["判定"] is None else ("○" if item["判定"] else "×")
+                gate_rows.append(
+                    {
+                        "項目": item["項目"], "基準": item["基準"],
+                        "実績": _format_gate_actual(item["実績"]), "判定": mark,
+                    }
+                )
                 st.dataframe(
-                    pd.DataFrame(gate_rows), width="stretch", hide_index=True
+                pd.DataFrame(gate_rows), width="stretch", hide_index=True
                 )
                 if gate["コホート平均差分pct"] is not None:
-                    ci = gate["信頼区間95"]
-                    ci_text = (
-                        f"（95%信頼区間 {ci[0]:+.2f}% ～ {ci[1]:+.2f}%）" if ci else ""
-                    )
-                    st.write(
-                        f"主エンドポイントのコホート平均差分：{gate['コホート平均差分pct']:+.2f}%"
-                        f"{ci_text}（スキャン回ごとに平均した値で、件数の多さに引きずられない集計です）"
-                    )
+                ci = gate["信頼区間95"]
+                ci_text = (
+                    f"（95%信頼区間 {ci[0]:+.2f}% ～ {ci[1]:+.2f}%）" if ci else ""
+                )
+                st.write(
+                    f"主エンドポイントのコホート平均差分：{gate['コホート平均差分pct']:+.2f}%"
+                    f"{ci_text}（スキャン回ごとに平均した値で、件数の多さに引きずられない集計です）"
+                )
                 dep = gate["銘柄依存"]
                 if dep["依存警告"]:
-                    loo = dep["最多銘柄を除いた差分平均pct"]
-                    loo_text = (
-                        f"{loo}%"
-                        if loo is not None
-                        else "算出不可（比較できる他の銘柄がありません）"
-                    )
-                    st.warning(
-                        f"注意：差分の多くが銘柄 {dep['最多銘柄']} に偏っています"
-                        f"（寄与率 {dep['寄与率'] * 100:.0f}%）。"
-                        f"その銘柄を除いた差分平均は {loo_text} です。"
-                    )
+                loo = dep["最多銘柄を除いた差分平均pct"]
+                loo_text = (
+                    f"{loo}%"
+                    if loo is not None
+                    else "算出不可（比較できる他の銘柄がありません）"
+                )
+                st.warning(
+                    f"注意：差分の多くが銘柄 {dep['最多銘柄']} に偏っています"
+                    f"（寄与率 {dep['寄与率'] * 100:.0f}%）。"
+                    f"その銘柄を除いた差分平均は {loo_text} です。"
+                )
                 fb = gate["再取得フォールバック"]
                 if fb["コホート数"]:
-                    st.write(
-                        f"V2を再取得データ（基準日検査済み）で計算したスキャン：{fb['コホート数']} 回分"
-                        "（スキャン時と同一のデータではないため、解釈に注意してください）"
-                    )
+                st.write(
+                    f"V2を再取得データ（基準日検査済み）で計算したスキャン：{fb['コホート数']} 回分"
+                    "（スキャン時と同一のデータではないため、解釈に注意してください）"
+                )
                 if gate["充足"]:
-                    st.success(
-                        "採用候補の条件を満たしています。ただし、採用するかどうかは別途の判断です"
-                        "（自動では切り替えません）。"
-                    )
+                st.success(
+                    "採用候補の条件を満たしています。ただし、採用するかどうかは別途の判断です"
+                    "（自動では切り替えません）。"
+                )
                 else:
-                    st.info(
-                        "採用ゲートはまだ条件を満たしていません。引き続きフォワードで蓄積してください。"
-                    )
+                st.info(
+                    "採用ゲートはまだ条件を満たしていません。引き続きフォワードで蓄積してください。"
+                )
 
 with tab_notes:
     st.subheader("使い方")
@@ -1336,7 +1336,7 @@ with tab_notes:
             zf.writestr(
                 "stock_ai_scan.csv",
                 scan.scan_to_csv(
-                    st.session_state.scan_ranked, st.session_state.scan_excluded
+                st.session_state.scan_ranked, st.session_state.scan_excluded
                 ),
             )
     st.download_button(
