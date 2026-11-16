@@ -163,3 +163,19 @@ def test_detail_tab_fetches_bundle_once(monkeypatch):
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
     assert len(calls) == 1
+
+
+def test_detail_tab_holds_scores_when_data_is_stale(monkeypatch):
+    raw = _frame()
+    raw.index = pd.bdate_range(end="2024-12-31", periods=len(raw))
+    clean = raw.copy()
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    texts = _all_text(at)
+    assert any("最新データが古い" in t for t in texts)
+    assert "条件スコア" not in [m.label for m in at.metric]
