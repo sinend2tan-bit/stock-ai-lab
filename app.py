@@ -756,12 +756,12 @@ with tab_scan:
             with st.spinner("V1・V2の両方で登録しています。"):
                 benchmarks = {}
                 for b_symbol in (forward.NIKKEI_SYMBOL, forward.TOPIX_PROXY_SYMBOL):
-                b_df, b_err = analysis.fetch_history(b_symbol, "3mo")
-                if b_err is None and b_df is not None and not b_df.empty:
-                    benchmarks[b_symbol] = (
-                        round(float(b_df["Close"].iloc[-1]), 3),
-                        pd.Timestamp(b_df.index[-1]).date().isoformat(),
-                    )
+                    b_df, b_err = analysis.fetch_history(b_symbol, "3mo")
+                    if b_err is None and b_df is not None and not b_df.empty:
+                        benchmarks[b_symbol] = (
+                            round(float(b_df["Close"].iloc[-1]), 3),
+                            pd.Timestamp(b_df.index[-1]).date().isoformat(),
+                        )
                 ranked = st.session_state.scan_ranked
                 excluded = st.session_state.scan_excluded
                 meta = st.session_state.scan_meta
