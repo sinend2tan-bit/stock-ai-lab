@@ -377,6 +377,87 @@ def test_bundle_does_not_mutate_downloaded_frame(monkeypatch):
     assert len(raw) == 40 and len(clean) == 39
 
 
+def test_bundle_multiindex_ticker_first_selects_requested_symbol(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    other = make_frame([200.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert err is None
+    pd.testing.assert_frame_equal(raw, target)
+    pd.testing.assert_frame_equal(clean, target)
+
+
+def test_bundle_multiindex_price_first_selects_requested_symbol(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    other = make_frame([200.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1).swaplevel(0, 1, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert err is None
+    pd.testing.assert_frame_equal(raw, target)
+    pd.testing.assert_frame_equal(clean, target)
+
+
+def test_bundle_multiindex_ambiguous_ticker_returns_clear_error(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    other = make_frame([200.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("9999.T", period="1y")
+
+    assert raw.empty and clean.empty
+    assert err is not None and "対象銘柄 9999.T" in err
+
+
+def test_bundle_multiindex_ambiguous_price_level_fails_closed(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    frame = make_frame([100.0 + i for i in range(40)])
+    # Both levels contain all OHLCV names; choosing the first level silently
+    # would appear to work but the column layout is structurally ambiguous.
+    columns = []
+    values = []
+    for field in analysis.NEEDED_COLUMNS:
+        columns.append((field, "7203.T"))
+        values.append(frame[field].to_numpy())
+        columns.append(("7203.T", field))
+        values.append(frame[field].to_numpy())
+    source = pd.DataFrame(
+        np.column_stack(values),
+        index=frame.index,
+        columns=pd.MultiIndex.from_tuples(columns),
+    )
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert raw.empty and clean.empty
+    assert err is not None and "階層を一意に特定できません" in err
+
+
+def test_bundle_does_not_borrow_missing_field_from_another_ticker(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)]).drop(columns=["Volume"])
+    other = make_frame([200.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert "Volume" not in raw.columns
+    assert raw.empty is False
+    assert clean.empty
+    assert err is not None and "必要な列" in err
+
+
 def test_bundle_missing_columns_returns_raw_and_error(monkeypatch):
     monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
     source = make_frame([100.0] * 40).drop(columns=["Volume"])
@@ -519,3 +600,28 @@ def test_fetch_history_preserves_missing_count_when_all_rows_are_dropped(monkeyp
     assert err is not None and "欠損のみ" in err
     assert clean.attrs["rows_dropped_by_dropna"] == len(source)
     assert clean.attrs["raw_row_count"] == len(source)
+
+
+def test_bundle_multiindex_single_ticker_selects_requested_symbol(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert err is None
+    pd.testing.assert_frame_equal(raw, target)
+    pd.testing.assert_frame_equal(clean, target)
+
+
+def test_bundle_duplicate_flat_ohlcv_columns_fail_closed(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    source = pd.concat([target, target[["Close"]]], axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert raw.empty and clean.empty
+    assert err is not None and "重複した価格列" in err

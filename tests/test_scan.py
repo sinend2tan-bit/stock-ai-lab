@@ -239,6 +239,67 @@ def test_scan_csv_contains_both_sections():
 
 # --- 欠損行の除外数（表示専用） ---
 
+
+def test_price_first_batch_multi_ticker_falls_back_to_individual_fetch(monkeypatch):
+    target = rising()
+    other = falling()
+    price_first = pd.concat(
+        {"7203.T": target, "6758.T": other}, axis=1
+    ).swaplevel(0, 1, axis=1)
+    monkeypatch.setattr(scan.yf, "download", lambda *args, **kwargs: price_first)
+
+    universe = [
+        ("7203.T", "対象社", "テスト"),
+        ("6758.T", "別銘柄社", "テスト"),
+    ]
+    individual_calls = []
+
+    def single_fetch(symbol):
+        individual_calls.append(symbol)
+        return (target if symbol == "7203.T" else other), None
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda symbols: scan.fetch_batch(symbols, period="1y"),
+        single_fetch,
+        run_at="price-first-batch-fallback-test",
+    )
+
+    assert excluded == []
+    assert {row["コード"] for row in ranked} == {"7203.T", "6758.T"}
+    assert set(individual_calls) == {"7203.T", "6758.T"}
+    assert len(individual_calls) == 2
+
+def test_shape_multiindex_ticker_first_selects_requested_symbol():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+
+    shaped = scan._shape(source, symbol="7203.T")
+
+    pd.testing.assert_frame_equal(shaped, target)
+
+
+def test_shape_multiindex_price_first_selects_requested_symbol():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1).swaplevel(0, 1, axis=1)
+
+    shaped = scan._shape(source, symbol="7203.T")
+
+    pd.testing.assert_frame_equal(shaped, target)
+
+
+def test_shape_multiindex_unknown_symbol_is_rejected():
+    target = rising()
+    other = falling()
+    source = pd.concat({"7203.T": target, "6758.T": other}, axis=1)
+
+    shaped = scan._shape(source, symbol="9999.T")
+
+    assert shaped.empty
+
+
 def test_scan_shape_preserves_missing_row_drop_count():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
