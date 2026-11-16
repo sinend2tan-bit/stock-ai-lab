@@ -116,7 +116,10 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
     def add_exclusion(horizon, reason, count):
         if count > 0:
             exclusions.append(
-                {"銘柄": symbol, "時間軸": horizon, "理由": reason, "件数": count}
+                {
+                    "銘柄": symbol, "時間軸": horizon, "理由": reason,
+                    "件数": count, "仕様版数": SPEC_VERSION,
+                }
             )
 
     if raw is None or raw.empty:
@@ -124,7 +127,7 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         exclusions.append({
             "銘柄": symbol, "時間軸": "全体",
             "理由": "データ取得に失敗したため、この銘柄は検証対象外",
-            "件数": 1,
+            "件数": 1, "仕様版数": SPEC_VERSION,
         })
         return records, exclusions
 
@@ -146,7 +149,7 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             "銘柄": symbol,
             "時間軸": "全体",
             "理由": "データ品質ゲートで検証対象外：" + " / ".join(quality_blocks),
-            "件数": 1,
+            "件数": 1, "仕様版数": SPEC_VERSION,
         })
         return records, exclusions
 
@@ -250,13 +253,24 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
     return records, exclusions, fetch_info
 
 
-def aggregate(records, exclusions=None):
-    """記録を集計する。的中率の分母は的中＋不的中のみ。
+def aggregate(records, exclusions=None, spec_version=SPEC_VERSION):
+    """指定仕様版数の記録だけを集計する。的中率の分母は的中＋不的中のみ。
 
     対象外の件数は、予測記録とは区別された対象外集計（exclusions）から数える。
     戻り値: {"時間軸別": [...], "銘柄別": [...], "実際方向別内訳": [...],
             "取得失敗": [...]}
     """
+    if spec_version is not None:
+        def _version_of_item(item):
+            try:
+                return int(item.get("仕様版数", 1))
+            except (TypeError, ValueError):
+                return 1
+        records = [r for r in records if _version_of_item(r) == spec_version]
+        exclusions = [
+            e for e in (exclusions or [])
+            if _version_of_item(e) == spec_version
+        ]
     df = pd.DataFrame(records)
     by_horizon = []
     by_symbol = []
@@ -447,7 +461,7 @@ def dedupe_records(records):
     return merged
 
 
-EXCLUSION_COLUMNS = ["銘柄", "時間軸", "理由", "件数"]
+EXCLUSION_COLUMNS = ["銘柄", "時間軸", "理由", "件数", "仕様版数"]
 
 
 def merge_exclusions(existing, incoming):
@@ -457,9 +471,12 @@ def merge_exclusions(existing, incoming):
     ため、件数を足し合わせることはしない。
     """
     merged = list(existing)
-    seen = {(e.get("銘柄"), e.get("時間軸"), e.get("理由")) for e in merged}
+    seen = {
+        (e.get("銘柄"), e.get("時間軸"), e.get("理由"), int(e.get("仕様版数", 1)))
+        for e in merged
+    }
     for ex in incoming:
-        key = (ex.get("銘柄"), ex.get("時間軸"), ex.get("理由"))
+        key = (ex.get("銘柄"), ex.get("時間軸"), ex.get("理由"), int(ex.get("仕様版数", 1)))
         if key in seen:
             continue
         seen.add(key)
@@ -468,7 +485,11 @@ def merge_exclusions(existing, incoming):
 
 
 def exclusions_to_csv(exclusions):
-    df = pd.DataFrame(exclusions, columns=EXCLUSION_COLUMNS)
+    normalized = [
+        {**item, "仕様版数": int(item.get("仕様版数", 1))}
+        for item in exclusions
+    ]
+    df = pd.DataFrame(normalized, columns=EXCLUSION_COLUMNS)
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
@@ -480,17 +501,19 @@ def exclusions_from_csv(data_bytes):
         df = pd.read_csv(io.BytesIO(data_bytes), dtype=str, keep_default_na=False)
     except Exception:
         return []
-    if not all(c in df.columns for c in EXCLUSION_COLUMNS):
+    legacy_columns = ["銘柄", "時間軸", "理由", "件数"]
+    if not all(c in df.columns for c in legacy_columns):
         return []
     exclusions = []
     for _, row in df.iterrows():
         try:
             count = int(float(row["件数"]))
+            version = int(float(row["仕様版数"])) if "仕様版数" in df.columns and row["仕様版数"] != "" else 1
         except (TypeError, ValueError):
             continue
         exclusions.append({
             "銘柄": row["銘柄"], "時間軸": row["時間軸"],
-            "理由": row["理由"], "件数": count,
+            "理由": row["理由"], "件数": count, "仕様版数": version,
         })
     return exclusions
 
