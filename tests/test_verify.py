@@ -113,7 +113,7 @@ def test_flat_band_boundaries():
 
 def _rec(**kw):
     base = {
-        "実行日時": "x", "仕様版数": 1, "銘柄": "7203.T", "会社名": "", "市場": "JP",
+        "実行日時": "x", "仕様版数": verify.SPEC_VERSION, "銘柄": "7203.T", "会社名": "", "市場": "JP",
         "評価日": "2025-01-06", "時間軸": "短期", "スコア": 3, "予測方向": "上昇",
         "評価ラベル": "", "評価日終値": 100.0, "測定日": "2025-01-13",
         "測定日終値": 103.0, "騰落率pct": 3.0, "実際の方向": "上昇",
@@ -134,8 +134,8 @@ def test_aggregate_denominator_and_pnl_exclusions():
              騰落率pct=0.5),
     ]
     exclusions = [
-        {"銘柄": "7203.T", "時間軸": "短期", "理由": "履歴不足のため評価開始前の地点", "件数": 7},
-        {"銘柄": "7203.T", "時間軸": "全体", "理由": "データ取得に失敗", "件数": 1},
+        {"銘柄": "7203.T", "時間軸": "短期", "理由": "履歴不足のため評価開始前の地点", "件数": 7, "仕様版数": verify.SPEC_VERSION},
+        {"銘柄": "7203.T", "時間軸": "全体", "理由": "データ取得に失敗", "件数": 1, "仕様版数": verify.SPEC_VERSION},
     ]
     summary = verify.aggregate(records, exclusions)
     short = next(r for r in summary["時間軸別"] if r["時間軸"] == "短期")
@@ -249,8 +249,8 @@ def test_merge_records_new_key_is_added():
 
 def test_exclusions_csv_roundtrip_and_no_double_count():
     exclusions = [
-        {"銘柄": "7203.T", "時間軸": "長期", "理由": "履歴不足のため評価開始前の地点", "件数": 49},
-        {"銘柄": "BAD", "時間軸": "全体", "理由": "データ取得に失敗したため、この銘柄は検証対象外", "件数": 1},
+        {"銘柄": "7203.T", "時間軸": "長期", "理由": "履歴不足のため評価開始前の地点", "件数": 49, "仕様版数": 1},
+        {"銘柄": "BAD", "時間軸": "全体", "理由": "データ取得に失敗したため、この銘柄は検証対象外", "件数": 1, "仕様版数": 1},
     ]
     loaded = verify.exclusions_from_csv(verify.exclusions_to_csv(exclusions))
     assert loaded == exclusions
@@ -268,9 +268,9 @@ def test_fetch_failure_exclusion_not_counted_in_horizons():
     # 取得失敗（時間軸「全体」）は、時間軸別・銘柄別の対象外件数に重複計上しない
     records = [_rec()]
     exclusions = [
-        {"銘柄": "BAD", "時間軸": "全体", "理由": "データ取得に失敗したため、この銘柄は検証対象外", "件数": 1},
-        {"銘柄": "7203.T", "時間軸": "短期", "理由": "履歴不足のため評価開始前の地点", "件数": 5},
-        {"銘柄": "7203.T", "時間軸": "中期", "理由": "履歴不足のため評価開始前の地点", "件数": 15},
+        {"銘柄": "BAD", "時間軸": "全体", "理由": "データ取得に失敗したため、この銘柄は検証対象外", "件数": 1, "仕様版数": verify.SPEC_VERSION},
+        {"銘柄": "7203.T", "時間軸": "短期", "理由": "履歴不足のため評価開始前の地点", "件数": 5, "仕様版数": verify.SPEC_VERSION},
+        {"銘柄": "7203.T", "時間軸": "中期", "理由": "履歴不足のため評価開始前の地点", "件数": 15, "仕様版数": verify.SPEC_VERSION},
     ]
     summary = verify.aggregate(records, exclusions)
     by_h = {r["時間軸"]: r for r in summary["時間軸別"]}
@@ -359,3 +359,27 @@ def test_verify_diagnostic_failure_is_excluded(monkeypatch):
     assert records == []
     assert len(exclusions) == 1
     assert "データ品質診断不能" in exclusions[0]["理由"]
+
+
+def test_aggregate_keeps_verification_spec_versions_separate():
+    current = verify.SPEC_VERSION
+    old = current - 1
+    records = [
+        _rec(仕様版数=old, 判定="不的中", 予測方向="下落"),
+        _rec(仕様版数=current, 判定="的中", 予測方向="上昇"),
+    ]
+    exclusions = [
+        {"銘柄": "7203.T", "時間軸": "短期", "理由": "old exclusion", "件数": 10, "仕様版数": old},
+        {"銘柄": "7203.T", "時間軸": "短期", "理由": "current exclusion", "件数": 2, "仕様版数": current},
+    ]
+    summary = verify.aggregate(records, exclusions)
+    short = next(row for row in summary["時間軸別"] if row["時間軸"] == "短期")
+    assert short["的中"] == 1
+    assert short["不的中"] == 0
+    assert short["対象外"] == 2
+
+    old_summary = verify.aggregate(records, exclusions, spec_version=old)
+    old_short = next(row for row in old_summary["時間軸別"] if row["時間軸"] == "短期")
+    assert old_short["的中"] == 0
+    assert old_short["不的中"] == 1
+    assert old_short["対象外"] == 10
