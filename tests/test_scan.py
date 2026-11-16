@@ -205,7 +205,7 @@ def test_scan_excludes_unprocessed_missing_ohlcv_rows():
     )
     assert ranked == []
     assert len(excluded) == 1
-    assert "未処理の欠損行" in excluded[0]["警告・理由"]
+    assert "必須OHLCV欠損 1行" in excluded[0]["警告・理由"]
 
 
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
@@ -320,7 +320,7 @@ def test_scan_excludes_data_when_required_ohlcv_row_was_dropped():
 
     assert ranked == []
     assert len(excluded) == 1
-    assert "必須OHLCV欠損により1行を除外" in excluded[0]["警告・理由"]
+    assert "必須OHLCV欠損 1行" in excluded[0]["警告・理由"]
 
 
 def test_scan_excludes_dropped_ohlcv_row_on_single_fetch_fallback():
