@@ -464,6 +464,13 @@ def dedupe_records(records):
 EXCLUSION_COLUMNS = ["銘柄", "時間軸", "理由", "件数", "仕様版数"]
 
 
+def _exclusion_version(item):
+    try:
+        return int(item.get("仕様版数") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
 def merge_exclusions(existing, incoming):
     """対象外集計を合算する。同じ銘柄・時間軸・理由は合算せず既存を残す。
 
@@ -472,11 +479,11 @@ def merge_exclusions(existing, incoming):
     """
     merged = list(existing)
     seen = {
-        (e.get("銘柄"), e.get("時間軸"), e.get("理由"), int(e.get("仕様版数", 1)))
+        (e.get("銘柄"), e.get("時間軸"), e.get("理由"), _exclusion_version(e))
         for e in merged
     }
     for ex in incoming:
-        key = (ex.get("銘柄"), ex.get("時間軸"), ex.get("理由"), int(ex.get("仕様版数", 1)))
+        key = (ex.get("銘柄"), ex.get("時間軸"), ex.get("理由"), _exclusion_version(ex))
         if key in seen:
             continue
         seen.add(key)
@@ -486,7 +493,7 @@ def merge_exclusions(existing, incoming):
 
 def exclusions_to_csv(exclusions):
     normalized = [
-        {**item, "仕様版数": int(item.get("仕様版数", 1))}
+        {**item, "仕様版数": _exclusion_version(item)}
         for item in exclusions
     ]
     df = pd.DataFrame(normalized, columns=EXCLUSION_COLUMNS)
