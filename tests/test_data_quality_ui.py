@@ -142,7 +142,7 @@ def test_detail_tab_zero_volume_only_keeps_score(monkeypatch):
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
     texts = _all_text(at)
-    assert any("出来高ゼロの警告候補" in t for t in texts)
+    assert any("警告候補：1件" in t for t in texts)
     assert "条件スコア" in [m.label for m in at.metric]
 
 
