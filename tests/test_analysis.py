@@ -600,3 +600,28 @@ def test_fetch_history_preserves_missing_count_when_all_rows_are_dropped(monkeyp
     assert err is not None and "欠損のみ" in err
     assert clean.attrs["rows_dropped_by_dropna"] == len(source)
     assert clean.attrs["raw_row_count"] == len(source)
+
+
+def test_bundle_multiindex_single_ticker_selects_requested_symbol(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    source = pd.concat({"7203.T": target}, axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert err is None
+    pd.testing.assert_frame_equal(raw, target)
+    pd.testing.assert_frame_equal(clean, target)
+
+
+def test_bundle_duplicate_flat_ohlcv_columns_fail_closed(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    target = make_frame([100.0 + i for i in range(40)])
+    source = pd.concat([target, target[["Close"]]], axis=1)
+    monkeypatch.setattr(analysis.yf, "download", lambda *a, **k: source)
+
+    raw, clean, err = analysis.fetch_history_bundle("7203.T", period="1y")
+
+    assert raw.empty and clean.empty
+    assert err is not None and "重複した価格列" in err
