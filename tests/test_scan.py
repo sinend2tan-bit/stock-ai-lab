@@ -315,3 +315,23 @@ def test_scan_reports_all_rows_dropped_when_fallback_has_no_data():
     assert ranked == []
     assert len(excluded) == 1
     assert "欠損行除外：300行" in excluded[0]["警告・理由"]
+
+
+
+def test_successful_single_fallback_does_not_inherit_batch_dropna_count():
+    batch_empty = pd.DataFrame()
+    batch_empty.attrs["rows_dropped_by_dropna"] = 7
+    fallback = rising()  # No missing rows and no batch-derived metadata.
+    universe = [("FALLBACKOK.T", "個別取得成功社", "テスト")]
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda symbols: {
+            "FALLBACKOK.T": (batch_empty, "batch unavailable")
+        },
+        lambda symbol: (fallback, None),
+        run_at="successful-fallback-no-leak-test",
+    )
+
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外" not in ranked[0]["警告・理由"]
