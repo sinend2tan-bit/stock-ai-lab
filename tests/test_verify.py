@@ -383,3 +383,15 @@ def test_aggregate_keeps_verification_spec_versions_separate():
     assert old_short["的中"] == 0
     assert old_short["不的中"] == 1
     assert old_short["対象外"] == 10
+
+
+def test_legacy_exclusion_csv_defaults_to_spec_v1():
+    legacy_csv = (
+        "銘柄,時間軸,理由,件数\n"
+        "7203.T,短期,旧仕様の履歴不足,5\n"
+    ).encode("utf-8-sig")
+    loaded = verify.exclusions_from_csv(legacy_csv)
+    assert loaded == [{
+        "銘柄": "7203.T", "時間軸": "短期",
+        "理由": "旧仕様の履歴不足", "件数": 5, "仕様版数": 1,
+    }]
