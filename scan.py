@@ -179,8 +179,8 @@ def _score_key(row):
     return (-val(row["中期スコア"]), -val(row["長期スコア"]), -val(row["短期スコア"]), row["コード"])
 
 
-def _data_quality_warnings(df, symbol):
-    """スキャン用のデータ品質警告を作る。診断結果は表示だけに使う。"""
+def _data_quality_assessment(df, symbol):
+    """品質警告とランキング除外理由を返す。診断不能も安全側で除外する。"""
     try:
         market = analysis.market_of(symbol)
         report = data_quality.diagnose_history(
@@ -189,18 +189,31 @@ def _data_quality_warnings(df, symbol):
             holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         )
     except Exception as exc:
-        return [f"データ品質診断不能（{type(exc).__name__}）"]
+        reason = f"データ品質診断不能（{type(exc).__name__}）"
+        return [reason], [reason]
+
     warnings = []
+    blocks = []
     dropped_rows = int(df.attrs.get("rows_dropped_by_dropna", 0) or 0)
     if dropped_rows:
         warnings.append(f"欠損行の除外 {dropped_rows}行（分析対象外）")
+        blocks.append(f"必須OHLCV欠損により{dropped_rows}行を除外")
+    if report.rows_with_missing:
+        blocks.append(f"未処理の欠損行 {report.rows_with_missing}行")
     if report.anomaly_count:
         warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
+        blocks.append(f"構造・価格・出来高の異常候補 {report.anomaly_count}件")
     if report.warning_count:
         warnings.append(f"出来高ゼロの警告候補 {report.warning_count}件")
     if report.review_count:
         warnings.append(f"日付間隔の要確認 {report.review_count}件")
-    return warnings
+        blocks.append(f"営業日欠損の可能性 {report.review_count}件")
+    return warnings, blocks
+
+
+def _data_quality_warnings(df, symbol):
+    """既存UI・テスト互換の品質警告一覧。"""
+    return _data_quality_assessment(df, symbol)[0]
 
 
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
@@ -249,7 +262,22 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             base["警告・理由"] = f"取得失敗：{failure_reason}"
             excluded.append(base)
         else:
-            quality_warnings = _data_quality_warnings(raw, symbol)
+            quality_warnings, quality_blocks = _data_quality_assessment(raw, symbol)
+            if quality_blocks:
+                # データ品質に疑義がある銘柄は、スコア計算・ランキングより前に隔離する。
+                # ゼロ出来高だけは警告扱いとし、単独では除外しない。
+                base["区分"] = "参考外"
+                base["本数"] = len(raw)
+                try:
+                    base["データ最終日"] = str(raw.index[-1].date())
+                except Exception:
+                    base["データ最終日"] = str(raw.index[-1])
+                base["警告・理由"] = "データ品質ゲートで除外： " + " / ".join(quality_blocks + quality_warnings)
+                excluded.append(base)
+                if progress is not None:
+                    progress(done, len(universe))
+                continue
+
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
