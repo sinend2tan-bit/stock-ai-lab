@@ -140,9 +140,13 @@ def _verification_price_frame(raw):
     numeric = raw[price_columns].apply(pd.to_numeric, errors="coerce")
     valid = numeric.notna().all(axis=1) & np.isfinite(numeric).all(axis=1)
     valid &= (numeric > 0).all(axis=1)
-    frame = raw.loc[valid].copy()
+    # Preserve the raw trading-session index. Dropping an interior OHLC-NA
+    # row would compress time and make indicators treat a multi-session return
+    # as a one-session return. Invalid rows remain NaN and are handled by the
+    # per-evaluation contiguous-history / forward-window gates below.
+    frame = raw.copy()
     for column in price_columns:
-        frame[column] = numeric.loc[valid, column]
+        frame[column] = numeric[column]
     if "Volume" in frame.columns:
         frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
     else:
@@ -235,12 +239,16 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
     warmup = {h: 0 for h in HORIZONS}
     tail = {h: 0 for h in HORIZONS}
     missing_window = {h: 0 for h in HORIZONS}
+    missing_eval = {h: 0 for h in HORIZONS}
 
-    # 評価日候補：切り取り本数が EVAL_STEP ごとに増える位置。
-    # 候補ごとに一度だけ、切り取りデータで指標計算と全時間軸の評価を行う。
+    # Use the original trading-session rows for evaluation dates and forward
+    # horizons. For indicators, restart from the first complete OHLC bar after
+    # the most recent interior OHLC gap; never bridge a missing bar as if two
+    # non-adjacent closes were consecutive sessions.
     for end in range(EVAL_STEP, n + 1, EVAL_STEP):
-        i = end - 1  # 評価日の行インデックス
-        assessed = None
+        i = end - 1
+        eval_date = price_frame.index[i]
+        eval_ohlc = price_frame.iloc[i][["Open", "High", "Low", "Close"]]
         for horizon in HORIZONS:
             if end < MIN_BARS[horizon]:
                 warmup[horizon] += 1
@@ -250,16 +258,24 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
                 tail[horizon] += 1
                 continue
             meas_idx = i + window
-            eval_date = price_frame.index[i]
             meas_date = price_frame.index[meas_idx]
+            if eval_ohlc.isna().any():
+                missing_eval[horizon] += 1
+                continue
             if any(eval_date < missing_date <= meas_date for missing_date in missing_ohlc_dates):
                 missing_window[horizon] += 1
                 continue
-            if assessed is None:
-                assessed = analysis.assess_all(
-                    analysis.add_indicators(price_frame.iloc[:end])
-                )
-            result = assessed[horizon]
+
+            prior_missing = [pos for pos in missing_ohlc_positions if pos < end]
+            segment_start = (prior_missing[-1] + 1) if prior_missing else 0
+            segment = price_frame.iloc[segment_start:end]
+            if len(segment) < MIN_BARS[horizon]:
+                warmup[horizon] += 1
+                continue
+
+            result = analysis.assess_all(
+                analysis.add_indicators(segment)
+            )[horizon]
             eval_close = float(closes.iloc[i])
             meas_close = float(closes.iloc[meas_idx])
             forward_pct = (meas_close / eval_close - 1.0) * 100.0 if eval_close else 0.0
@@ -295,8 +311,9 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             records.append(rec)
 
     for horizon in HORIZONS:
-        add_exclusion(horizon, "履歴不足のため評価開始前の地点", warmup[horizon])
+        add_exclusion(horizon, "履歴不足のため評価開始前の地点（欠損後の連続OHLC履歴不足を含む）", warmup[horizon])
         add_exclusion(horizon, "測定窓の終わりまでデータがない地点", tail[horizon])
+        add_exclusion(horizon, "評価日OHLC欠損のため評価保留", missing_eval[horizon])
         add_exclusion(horizon, "測定窓内にOHLC欠損行があるため評価保留", missing_window[horizon])
 
     return records, exclusions
