@@ -177,6 +177,14 @@ def test_scan_diagnostic_failure_fails_closed(monkeypatch):
     assert "データ品質診断不能" in excluded[0]["警告・理由"]
 
 
+def test_scanner_allows_missing_volume_column_as_unknown():
+    raw = rising().drop(columns=["Volume"])
+    shaped = scan._scanner_price_frame(raw)
+    assert not shaped.empty
+    assert shaped.index.equals(raw.index)
+    assert shaped["Volume"].isna().all()
+
+
 def test_scan_shape_retains_raw_and_price_bar_for_volume_only_missing_row():
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
