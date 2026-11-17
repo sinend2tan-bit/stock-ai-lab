@@ -118,11 +118,19 @@ def _shape(df, symbol=None):
     try:
         raw, clean, error = analysis._split_raw_clean(df, symbol=symbol)
         if raw is not None and not raw.empty:
-            # Keep the original rows for quality diagnostics; indicators continue
-            # to use the unchanged dropna-cleaned frame.
-            clean.attrs["_quality_raw"] = raw.copy()
+            # Diagnose original rows once, then retain only the compact report.
+            # The cleaned frame remains unchanged for indicator calculations.
             clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
             clean.attrs["raw_row_count"] = len(raw)
+            try:
+                market = analysis.market_of(symbol)
+                clean.attrs["_quality_report"] = data_quality.diagnose_history(
+                    raw,
+                    market=market,
+                    holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+                )
+            except Exception as exc:
+                clean.attrs["_quality_diagnostic_error"] = type(exc).__name__
         return clean
     except Exception:
         return pd.DataFrame()
@@ -177,17 +185,22 @@ def _score_key(row):
 
 def _data_quality_assessment(df, symbol):
     """元データ品質を診断し、ランキング保留理由と警告を分けて返す。"""
-    quality_raw = df.attrs.get("_quality_raw", df)
-    try:
-        market = analysis.market_of(symbol)
-        report = data_quality.diagnose_history(
-            quality_raw,
-            market=market,
-            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        )
-    except Exception as exc:
-        reason = f"データ品質診断不能（{type(exc).__name__}）"
+    diagnostic_error = df.attrs.get("_quality_diagnostic_error")
+    report = df.attrs.get("_quality_report")
+    if diagnostic_error:
+        reason = f"データ品質診断不能（{diagnostic_error}）"
         return [reason], [reason]
+    if report is None:
+        try:
+            market = analysis.market_of(symbol)
+            report = data_quality.diagnose_history(
+                df,
+                market=market,
+                holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+            )
+        except Exception as exc:
+            reason = f"データ品質診断不能（{type(exc).__name__}）"
+            return [reason], [reason]
 
     warnings = []
     if report.rows_with_missing:
@@ -280,7 +293,8 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 continue
             # Remove the retained raw frame before indicator copies to avoid carrying
             # a large diagnostic-only DataFrame through the analysis pipeline.
-            raw.attrs.pop("_quality_raw", None)
+            raw.attrs.pop("_quality_report", None)
+            raw.attrs.pop("_quality_diagnostic_error", None)
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
