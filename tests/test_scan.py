@@ -182,7 +182,7 @@ def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
     assert shaped.attrs["_quality_report"].rows_with_missing == 1
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
-    assert any("欠損行 1行" in item for item in warnings)
+    assert any("欠損行の除外 1行" in item for item in warnings)
 
 
 def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
@@ -190,7 +190,7 @@ def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
     frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
     shaped = scan._shape(frame, symbol="7203.T")
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
-    assert any("価格データ欠損 1行" in item for item in blocks)
+    assert any("最新行の価格データ欠損：Close" in item for item in blocks)
 
 
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
@@ -388,11 +388,11 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
         run_at="missing-row-baseline-test",
     )
 
-    assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
-    assert ranked[0]["中期スコア"] == baseline[0]["中期スコア"]
-    assert ranked[0]["短期スコア"] == baseline[0]["短期スコア"]
-    assert ranked[0]["長期スコア"] == baseline[0]["長期スコア"]
+    # A confirmed official-session gap is a blocking integrity issue even
+    # when the affected historical OHLC row was dropped from the indicator frame.
+    assert ranked == [] and len(excluded) == 1
+    assert "欠損行の除外 1行" in excluded[0]["警告・理由"]
+    assert "営業日欠損候補" in excluded[0]["警告・理由"]
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
@@ -409,8 +409,9 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
         run_at="missing-row-fallback-test",
     )
 
-    assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert ranked == [] and len(excluded) == 1
+    assert "欠損行の除外 1行" in excluded[0]["警告・理由"]
+    assert "営業日欠損候補" in excluded[0]["警告・理由"]
 
 
 
