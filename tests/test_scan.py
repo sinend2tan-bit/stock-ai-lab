@@ -489,6 +489,8 @@ def test_scanner_indicator_calculation_restarts_after_historical_ohlc_gap():
         shaped.attrs["_quality_raw"]
     )
     after_gap = frame.index[gap_position + 1]
+    assert frame.index[gap_position - 1] not in features.index
+    assert frame.index[gap_position] not in features.index
     assert pd.isna(features.loc[after_gap, "Return_1d_pct"])
 
     # The same timestamp is a normal adjacent-bar return without the gap.
