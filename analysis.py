@@ -215,7 +215,6 @@ def _split_raw_clean(df, symbol=None):
         # rows omitted by dropna for read-only scan diagnostics.
         clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
         clean.attrs["raw_row_count"] = len(raw)
-        clean.attrs["_quality_raw"] = raw.copy()
     except Exception as exc:
         return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
     if clean.empty:
@@ -243,22 +242,18 @@ def fetch_history_bundle(symbol, period="2y"):
     return _split_raw_clean(df, symbol=symbol)
 
 
-def fetch_history(symbol, period="2y"):
+def fetch_history(symbol, period="2y", include_quality_raw=False):
     """株価の日足を取得する。
 
-    戻り値: (DataFrame, error_message)
-    成功時は (データ, None)、失敗時は (空のDataFrame, 理由の説明)。
-    例外は外に出さず、画面全体が止まらないようにする。
-    通信エラーや空の結果の場合は、短い間隔を置いて1回だけ再試行する
-    （一時的な取得制限への対策。再試行は最大で合計2回まで）。
+    通常はcleanだけを返す。scannerの個別取得fallbackのみ
+    include_quality_raw=True とし、診断用rawを明示的にattrsへ渡す。
     """
-    _, clean, error = fetch_history_bundle(symbol, period)
+    raw, clean, error = fetch_history_bundle(symbol, period)
     if error is not None:
-        # Keep metadata on an empty result too, so callers can explain when
-        # every downloaded row was excluded by the existing dropna() step.
         return clean, error
+    if include_quality_raw and raw is not None and not raw.empty:
+        clean.attrs["_quality_raw"] = raw.copy()
     return clean, None
-
 
 def add_indicators(df):
     """テクニカル指標を付ける。EMA200は200本そろうまで NaN（有効でない）とする。"""
