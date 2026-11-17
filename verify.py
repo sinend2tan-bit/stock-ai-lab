@@ -110,6 +110,8 @@ def _verification_quality_issues(symbol, raw):
     """
     if not isinstance(raw, pd.DataFrame):
         return ["入力データがDataFrameではありません"]
+    if not isinstance(raw.index, pd.DatetimeIndex):
+        return ["日付indexがDatetimeIndexではありません"]
     if raw.empty:
         return ["検証データが空です"]
     if raw.columns.duplicated().any():
@@ -273,9 +275,17 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
             recs, excls = verify_symbol(symbol, raw, period_label, run_at)
             records.extend(recs)
             exclusions.extend(excls)
+            quality_exclusion = next(
+                (e for e in excls if e.get("時間軸") == "全体"
+                 and e.get("理由", "").startswith("データ品質上の問題")),
+                None,
+            )
             fetch_info.append({
-                "銘柄": symbol, "取得": "成功", "本数": len(raw),
-                "データ最終日": str(raw.index[-1].date()), "理由": "",
+                "銘柄": symbol,
+                "取得": "品質保留" if quality_exclusion else "成功",
+                "本数": len(raw),
+                "データ最終日": str(raw.index[-1].date()),
+                "理由": quality_exclusion["理由"] if quality_exclusion else "",
             })
         if progress is not None:
             progress(done, len(symbols))
