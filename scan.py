@@ -275,6 +275,44 @@ def _data_quality_warnings(df, symbol):
     return _data_quality_assessment(df, symbol)[0]
 
 
+def _add_indicators_by_valid_ohlc_segments(raw):
+    """Historical invalid OHLC rows break indicator continuity.
+
+    The quality gate blocks structural price anomalies and confirmed missing
+    trading sessions before this function is called. Isolated historical OHLC
+    NA rows are non-blocking, so calculate each valid segment independently
+    rather than compressing time and treating rows on either side as adjacent.
+    Volume missingness does not split a price-only indicator segment.
+    """
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    required = ["Open", "High", "Low", "Close"]
+    if raw.columns.duplicated().any() or any(col not in raw.columns for col in required):
+        return pd.DataFrame()
+
+    numeric = raw[required].apply(pd.to_numeric, errors="coerce")
+    values = numeric.to_numpy(dtype=float)
+    valid = (
+        numeric.notna().all(axis=1).to_numpy()
+        & np.isfinite(values).all(axis=1)
+        & (values > 0).all(axis=1)
+    )
+    valid_positions = np.flatnonzero(valid)
+    if valid_positions.size == 0:
+        return pd.DataFrame()
+
+    split_points = np.flatnonzero(np.diff(valid_positions) > 1) + 1
+    segments = np.split(valid_positions, split_points)
+    feature_frames = []
+    for positions in segments:
+        segment = raw.iloc[positions].copy()
+        for column in required:
+            segment[column] = numeric.iloc[positions][column].to_numpy(dtype=float)
+        feature_frames.append(analysis.add_indicators(segment))
+
+    return pd.concat(feature_frames).sort_index()
+
+
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
     """スキャンを実行する。
 
@@ -364,7 +402,11 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 "rows_dropped_by_dropna", "raw_row_count", "volume_only_missing_rows",
             ):
                 raw.attrs.pop(key, None)
-            df = analysis.add_indicators(raw)
+            # Use the original raw frame so historical OHLC NA rows remain
+            # visible as segment boundaries; the shaped frame has already
+            # excluded those rows for the ranking/quality display.
+            indicator_source = raw.attrs.get("_quality_raw", raw)
+            df = _add_indicators_by_valid_ohlc_segments(indicator_source)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
             mid = results["中期"]
