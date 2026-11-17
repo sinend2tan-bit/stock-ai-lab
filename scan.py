@@ -176,6 +176,23 @@ def fetch_batch(symbols, period=SCAN_PERIOD):
     return results
 
 
+def clean_frame_for_forward(df):
+    """Forward検証へ渡すclean OHLCVだけを複製し、診断用attrsを除去する。
+
+    single-fetch fallbackでは元OHLCVが診断用attrsに保持されるため、
+    そのままセッション保存・V2検証へ複製しない。
+    """
+    if df is None:
+        return None
+    captured = df.copy()
+    for key in (
+        "_quality_raw", "_quality_report", "_quality_diagnostic_error",
+        "rows_dropped_by_dropna", "raw_row_count",
+    ):
+        captured.attrs.pop(key, None)
+    return captured
+
+
 def _score_key(row):
     """並び順：中期→長期→短期のスコア降順、最後はコード順（決定的にする）。"""
     def val(score):
