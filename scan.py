@@ -280,8 +280,9 @@ def _add_indicators_by_valid_ohlc_segments(raw):
 
     The quality gate blocks structural price anomalies and confirmed missing
     trading sessions before this function is called. Isolated historical OHLC
-    NA rows are non-blocking, so calculate each valid segment independently
-    rather than compressing time and treating rows on either side as adjacent.
+    NA rows are non-blocking, so only the latest contiguous valid OHLC
+    segment is passed to scoring. This also keeps row-offset return horizons
+    from crossing an earlier missing-price gap.
     Volume missingness does not split a price-only indicator segment.
     """
     if raw is None or raw.empty:
