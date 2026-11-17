@@ -469,6 +469,11 @@ def test_scan_shape_retains_ohlc_bar_when_only_volume_is_missing():
     assert shaped.attrs["volume_only_missing_rows"] == 1
 
 
+def test_scan_shape_rejects_missing_required_volume_column():
+    frame = rising().drop(columns=["Volume"])
+    assert scan._shape(frame).empty
+
+
 def test_scan_price_indicators_and_scores_are_unchanged_by_volume_only_missing():
     baseline = rising()
     with_missing_volume = baseline.copy(deep=True)
