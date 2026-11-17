@@ -16,6 +16,7 @@
 
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
 
 import analysis
@@ -102,20 +103,16 @@ def _base_record(symbol, run_at, period_label, last_date):
 
 
 
-def _verification_quality_issues(symbol, raw):
-    """Return fail-closed integrity issues before positional historical evaluation.
-
-    Never sort, deduplicate, interpolate, or drop rows here: those operations
-    would silently change the historical evidence and the meaning of horizons.
-    """
+def _verification_quality_report(symbol, raw):
+    """Return (report, blockers); never repair or reorder source evidence."""
     if not isinstance(raw, pd.DataFrame):
-        return ["入力データがDataFrameではありません"]
+        return None, ["入力データがDataFrameではありません"]
     if not isinstance(raw.index, pd.DatetimeIndex):
-        return ["日付indexがDatetimeIndexではありません"]
+        return None, ["日付indexがDatetimeIndexではありません"]
     if raw.empty:
-        return ["検証データが空です"]
+        return None, ["検証データが空です"]
     if raw.columns.duplicated().any():
-        return ["列名が重複しています"]
+        return None, ["列名が重複しています"]
 
     try:
         market = analysis.market_of(symbol)
@@ -125,25 +122,25 @@ def _verification_quality_issues(symbol, raw):
             holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         )
     except Exception as exc:
-        return [f"品質診断不能：{type(exc).__name__}: {str(exc)[:120]}"]
+        return None, [f"品質診断不能：{type(exc).__name__}: {str(exc)[:120]}"]
 
     issues = list(report.blocking_reasons())
-    # Historical verification rejects interior OHLC NA too: it can corrupt
-    # indicators and positional horizons even when the latest row is complete.
-    price_columns = {"Open", "High", "Low", "Close"}
-    missing_price_rows = sorted({
-        item.get("row")
-        for item in report.missing_cells
-        if price_columns.intersection(item.get("columns", []))
-    })
-    if missing_price_rows:
-        issues.append(
-            f"履歴中のOHLC欠損 {len(missing_price_rows)}行（元行位置: "
-            + ", ".join(str(i) for i in missing_price_rows[:10])
-            + ("…" if len(missing_price_rows) > 10 else "")
-            + "）"
-        )
-    return list(dict.fromkeys(issues))
+    if report.missing_columns:
+        issues.append("必須列欠落：" + "、".join(report.missing_columns))
+    return report, list(dict.fromkeys(issues))
+
+
+def _verification_price_frame(raw):
+    """Keep valid OHLC bars; preserve Volume NA as NaN (Volume is not a score input)."""
+    price_columns = ["Open", "High", "Low", "Close"]
+    numeric = raw[price_columns].apply(pd.to_numeric, errors="coerce")
+    valid = numeric.notna().all(axis=1) & np.isfinite(numeric).all(axis=1)
+    valid &= (numeric > 0).all(axis=1)
+    frame = raw.loc[valid].copy()
+    for column in price_columns:
+        frame[column] = numeric.loc[valid, column]
+    frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
+    return frame
 
 
 
@@ -174,7 +171,7 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         })
         return records, exclusions
 
-    quality_issues = _verification_quality_issues(symbol, raw)
+    report, quality_issues = _verification_quality_report(symbol, raw)
     if quality_issues:
         exclusions.append({
             "銘柄": symbol,
@@ -185,10 +182,33 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         return records, exclusions
 
     last_date = raw.index[-1].date()
-    closes = raw["Close"]
-    n = len(raw)
-    warmup = {h: 0 for h in HORIZONS}  # 履歴不足で評価を始められなかった地点数
-    tail = {h: 0 for h in HORIZONS}  # 測定窓が足りず対象外になった地点数
+    price_frame = _verification_price_frame(raw)
+    if price_frame.empty:
+        exclusions.append({
+            "銘柄": symbol, "時間軸": "全体",
+            "理由": "有効なOHLC価格行がありません", "件数": 1,
+        })
+        return records, exclusions
+
+    price_columns = {"Open", "High", "Low", "Close"}
+    missing_ohlc_positions = sorted({
+        item.get("row")
+        for item in report.missing_cells
+        if price_columns.intersection(item.get("columns", []))
+    })
+    missing_ohlc_dates = [raw.index[pos] for pos in missing_ohlc_positions]
+    if missing_ohlc_dates:
+        add_exclusion(
+            "品質警告",
+            "履歴中のOHLC欠損行を指標入力から除外（測定窓に含む評価地点は時間軸別に保留）",
+            len(missing_ohlc_dates),
+        )
+
+    closes = price_frame["Close"]
+    n = len(price_frame)
+    warmup = {h: 0 for h in HORIZONS}
+    tail = {h: 0 for h in HORIZONS}
+    missing_window = {h: 0 for h in HORIZONS}
 
     # 評価日候補：切り取り本数が EVAL_STEP ごとに増える位置。
     # 候補ごとに一度だけ、切り取りデータで指標計算と全時間軸の評価を行う。
@@ -203,19 +223,26 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             if i + window > n - 1:
                 tail[horizon] += 1
                 continue
+            meas_idx = i + window
+            eval_date = price_frame.index[i]
+            meas_date = price_frame.index[meas_idx]
+            if any(eval_date < missing_date <= meas_date for missing_date in missing_ohlc_dates):
+                missing_window[horizon] += 1
+                continue
             if assessed is None:
-                assessed = analysis.assess_all(analysis.add_indicators(raw.iloc[:end]))
+                assessed = analysis.assess_all(
+                    analysis.add_indicators(price_frame.iloc[:end])
+                )
             result = assessed[horizon]
             eval_close = float(closes.iloc[i])
-            meas_idx = i + window
             meas_close = float(closes.iloc[meas_idx])
             forward_pct = (meas_close / eval_close - 1.0) * 100.0 if eval_close else 0.0
 
             rec = _base_record(symbol, run_at, period_label, last_date)
-            rec["評価日"] = str(raw.index[i].date())
+            rec["評価日"] = str(eval_date.date())
             rec["時間軸"] = horizon
             rec["評価日終値"] = round(eval_close, 3)
-            rec["測定日"] = str(raw.index[meas_idx].date())
+            rec["測定日"] = str(meas_date.date())
             rec["測定日終値"] = round(meas_close, 3)
             rec["騰落率pct"] = round(forward_pct, 3)
             rec["実際の方向"] = actual_direction(forward_pct, horizon)
@@ -244,6 +271,7 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
     for horizon in HORIZONS:
         add_exclusion(horizon, "履歴不足のため評価開始前の地点", warmup[horizon])
         add_exclusion(horizon, "測定窓の終わりまでデータがない地点", tail[horizon])
+        add_exclusion(horizon, "測定窓内にOHLC欠損行があるため評価保留", missing_window[horizon])
 
     return records, exclusions
 
@@ -280,6 +308,10 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                  and e.get("理由", "").startswith("データ品質上の問題")),
                 None,
             )
+            quality_warning = next(
+                (e for e in excls if e.get("時間軸") == "品質警告"),
+                None,
+            )
             try:
                 parsed_last = pd.to_datetime(raw.index[-1], errors="coerce")
                 last_date = "" if pd.isna(parsed_last) else str(parsed_last.date())
@@ -287,10 +319,14 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                 last_date = ""
             fetch_info.append({
                 "銘柄": symbol,
-                "取得": "品質保留" if quality_exclusion else "成功",
+                "取得": "品質保留" if quality_exclusion else (
+                    "品質警告あり" if quality_warning else "成功"
+                ),
                 "本数": len(raw),
                 "データ最終日": last_date,
-                "理由": quality_exclusion["理由"] if quality_exclusion else "",
+                "理由": quality_exclusion["理由"] if quality_exclusion else (
+                    quality_warning["理由"] if quality_warning else ""
+                ),
             })
         if progress is not None:
             progress(done, len(symbols))
