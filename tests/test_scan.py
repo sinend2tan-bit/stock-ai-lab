@@ -179,10 +179,13 @@ def test_scan_diagnostic_failure_fails_closed(monkeypatch):
 
 def test_scanner_allows_missing_volume_column_as_unknown():
     raw = rising().drop(columns=["Volume"])
-    shaped = scan._scanner_price_frame(raw)
+    shaped = scan._shape(raw, symbol="7203.T")
     assert not shaped.empty
     assert shaped.index.equals(raw.index)
     assert shaped["Volume"].isna().all()
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert blocks == []
+    assert any("Volume" in item for item in warnings)
 
 
 def test_scan_shape_retains_raw_and_price_bar_for_volume_only_missing_row():
