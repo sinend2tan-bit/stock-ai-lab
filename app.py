@@ -309,7 +309,10 @@ with tab_overview:
                 quality_report, quality_blocks, quality_error = analysis_quality.assess(
                     raw_hist, sym
                 )
-                df = analysis.add_indicators(analysis_quality.scoring_frame(raw_hist))
+                indicator_input = analysis_quality.scoring_frame(raw_hist)
+                if indicator_input.empty:
+                    indicator_input = clean_hist
+                df = analysis.add_indicators(indicator_input)
                 note = ""
                 if quality_error:
                     quality_blocks = [f"品質診断不能：{quality_error}"]
@@ -370,7 +373,10 @@ with tab_detail:
                 st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
                 show_data_quality(raw_hist, selected_symbol)
         else:
-            df = analysis.add_indicators(analysis_quality.scoring_frame(raw_hist))
+            indicator_input = analysis_quality.scoring_frame(raw_hist)
+                if indicator_input.empty:
+                    indicator_input = clean_hist
+                df = analysis.add_indicators(indicator_input)
             quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
             if df.empty:
                 st.error("有効なOHLC価格行がないため、チャート・指標・スコアを表示できません。")
