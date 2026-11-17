@@ -333,6 +333,8 @@ with tab_overview:
                     if quality_report is not None:
                         if quality_report.rows_with_missing:
                             note_parts.append(f"欠損行除外 {quality_report.rows_with_missing}行")
+                        if quality_report.anomaly_count:
+                            note_parts.append(f"品質異常候補 {quality_report.anomaly_count}件")
                         if quality_report.warning_count:
                             note_parts.append(f"品質警告 {quality_report.warning_count}件")
                         if quality_report.unverified_gap_count:
