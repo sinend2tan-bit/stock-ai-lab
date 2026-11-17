@@ -735,7 +735,16 @@ def test_missing_cells_identify_price_and_volume_fields_without_double_counting(
         close=[100.0, 100.0, np.nan, 100.0, 100.0],
     )
     rp = diagnose_history(price_missing, as_of=AS_OF)
-    assert rp.blocking_reasons() == ["価格データ欠損 1行"]
+    # An isolated historical row is dropped from indicators and reported, not
+    # enough by itself to suppress an otherwise usable ticker.
+    assert rp.blocking_reasons() == []
+
+    latest_missing = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, 100.0, 100.0, np.nan],
+    )
+    rl = diagnose_history(latest_missing, as_of=AS_OF)
+    assert rl.blocking_reasons() == ["最新行の価格データ欠損：Close"]
 
 
 def test_invalid_numeric_price_string_blocks_but_true_nan_is_counted_once():
