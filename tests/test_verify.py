@@ -138,6 +138,21 @@ def test_verification_rejects_nat_date_index():
     assert "日付不正" in exclusions[0]["理由"]
 
 
+
+def test_verify_all_reports_quality_hold_for_non_datetime_index():
+    frame = rising_frame(400)
+    frame.index = pd.Index([str(d.date()) for d in frame.index])
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, None), run_at="x"
+    )
+    assert records == []
+    assert exclusions and exclusions[0]["時間軸"] == "全体"
+    assert info[0]["取得"] == "品質保留"
+    assert "DatetimeIndex" in info[0]["理由"]
+    assert info[0]["データ最終日"]
+
+
+
 def test_verification_rejects_invalid_ohlc_value():
     frame = rising_frame(400)
     frame.iloc[150, frame.columns.get_loc("High")] = -1.0
