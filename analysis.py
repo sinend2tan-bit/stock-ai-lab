@@ -614,6 +614,20 @@ def _business_days_elapsed(market, last_date, today):
     return count
 
 
+def freshness_status_label(status):
+    """Return a concise display label for the existing freshness status.
+
+    Presentation only: this does not change freshness classification, scoring,
+    or ranking eligibility.
+    """
+    return {
+        "fresh": "取得成功",
+        "check": "間隔確認",
+        "stale": "鮮度注意",
+        "no_data": "取得失敗",
+    }.get(status, "鮮度不明")
+
+
 def freshness_check(df, symbol, today=None):
     """データの新しさを市場営業日ベースで暫定判定する。
 
