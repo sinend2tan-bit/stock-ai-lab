@@ -204,7 +204,7 @@ def _data_quality_assessment(df, symbol):
 
     warnings = []
     if report.rows_with_missing:
-        warnings.append(f"欠損行 {report.rows_with_missing}行（分析用データから除外）")
+        warnings.append(f"欠損行の除外 {report.rows_with_missing}行（分析対象外）")
     if report.volume_issues.get("negative") or report.volume_issues.get("non_finite"):
         count = len(report.volume_issues.get("negative", [])) + len(report.volume_issues.get("non_finite", []))
         warnings.append(f"出来高異常 {count}件（現在のスコア計算対象外）")
