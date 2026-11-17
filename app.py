@@ -298,20 +298,20 @@ with tab_overview:
         for i, sym in enumerate(symbols):
             status.write(f"取得中：{sym}")
             raw_hist, clean_hist, err = get_history_bundle(sym, period)
-            if err is not None or clean_hist is None or clean_hist.empty:
+            indicator_input = analysis_quality.scoring_frame(raw_hist)
+            if raw_hist is None or raw_hist.empty or indicator_input.empty:
                 rows.append({
-                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得失敗", "終値": None,
-                    "データ最終日": None, "本数": 0,
-                    "短期": "—", "中期": "—", "長期": "—",
-                    "備考": err or "データなし",
+                    "銘柄": sym, "会社名": company_name(sym),
+                    "状態": "品質保留" if raw_hist is not None and not raw_hist.empty else "取得失敗",
+                    "終値": None, "データ最終日": None, "本数": 0,
+                    "短期": "判定保留（データ品質）", "中期": "判定保留（データ品質）",
+                    "長期": "判定保留（データ品質）",
+                    "備考": err or "有効なOHLC価格行がありません",
                 })
             else:
                 quality_report, quality_blocks, quality_error = analysis_quality.assess(
                     raw_hist, sym
                 )
-                indicator_input = analysis_quality.scoring_frame(raw_hist)
-                if indicator_input.empty:
-                    indicator_input = clean_hist
                 df = analysis.add_indicators(indicator_input)
                 note = ""
                 if quality_error:
@@ -366,16 +366,13 @@ with tab_detail:
     else:
         st.markdown(f"**対象銘柄：{analysis.display_label(selected_symbol, company_name(selected_symbol))}**")
         raw_hist, clean_hist, err = get_history_bundle(selected_symbol, period)
-        if err is not None:
-            st.error("データを取得できませんでした。" + err)
-            st.write("銘柄コードを確認するか、時間をおいて「データを取得・更新」を押してください。取得できない場合は、その旨を表示するだけで、有料データへは切り替えません。")
-            if not raw_hist.empty:
-                st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
+        indicator_input = analysis_quality.scoring_frame(raw_hist)
+        if raw_hist is None or raw_hist.empty or indicator_input.empty:
+            st.error("有効なOHLC価格行がないため、分析を保留します。" + (err or ""))
+            st.write("データ取得状態と品質診断を確認してください。")
+            if raw_hist is not None and not raw_hist.empty:
                 show_data_quality(raw_hist, selected_symbol)
         else:
-            indicator_input = analysis_quality.scoring_frame(raw_hist)
-            if indicator_input.empty:
-                indicator_input = clean_hist
             df = analysis.add_indicators(indicator_input)
             quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
             if df.empty:
