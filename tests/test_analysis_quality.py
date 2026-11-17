@@ -94,3 +94,12 @@ def test_scoring_frame_omits_interior_ohlc_na_but_keeps_later_bars():
     score_frame = analysis_quality.scoring_frame(raw)
     assert len(score_frame) == len(raw) - 1
     assert raw.index[-1] in score_frame.index
+
+def test_scoring_frame_empty_when_all_price_rows_are_invalid():
+    raw = frame()
+    raw.loc[:, ["Open", "High", "Low", "Close"]] = -1.0
+    result = analysis_quality.scoring_frame(raw)
+    assert result.empty
+    assert list(result.columns) == ["Open", "High", "Low", "Close", "Volume"]
+
+
