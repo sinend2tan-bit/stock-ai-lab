@@ -19,6 +19,7 @@ from datetime import datetime
 import pandas as pd
 
 import analysis
+import data_quality
 
 SPEC_VERSION = 1
 
@@ -100,6 +101,50 @@ def _base_record(symbol, run_at, period_label, last_date):
     }
 
 
+
+def _verification_quality_issues(symbol, raw):
+    """Return fail-closed integrity issues before positional historical evaluation.
+
+    Never sort, deduplicate, interpolate, or drop rows here: those operations
+    would silently change the historical evidence and the meaning of horizons.
+    """
+    if not isinstance(raw, pd.DataFrame):
+        return ["入力データがDataFrameではありません"]
+    if raw.empty:
+        return ["検証データが空です"]
+    if raw.columns.duplicated().any():
+        return ["列名が重複しています"]
+
+    try:
+        market = analysis.market_of(symbol)
+        report = data_quality.diagnose_history(
+            raw,
+            market=market,
+            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+        )
+    except Exception as exc:
+        return [f"品質診断不能：{type(exc).__name__}: {str(exc)[:120]}"]
+
+    issues = list(report.blocking_reasons())
+    # Historical verification rejects interior OHLC NA too: it can corrupt
+    # indicators and positional horizons even when the latest row is complete.
+    price_columns = {"Open", "High", "Low", "Close"}
+    missing_price_rows = sorted({
+        item.get("row")
+        for item in report.missing_cells
+        if price_columns.intersection(item.get("columns", []))
+    })
+    if missing_price_rows:
+        issues.append(
+            f"履歴中のOHLC欠損 {len(missing_price_rows)}行（元行位置: "
+            + ", ".join(str(i) for i in missing_price_rows[:10])
+            + ("…" if len(missing_price_rows) > 10 else "")
+            + "）"
+        )
+    return list(dict.fromkeys(issues))
+
+
+
 def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
     """1銘柄分の過去検証を行う。
 
@@ -123,6 +168,16 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         exclusions.append({
             "銘柄": symbol, "時間軸": "全体",
             "理由": "データ取得に失敗したため、この銘柄は検証対象外",
+            "件数": 1,
+        })
+        return records, exclusions
+
+    quality_issues = _verification_quality_issues(symbol, raw)
+    if quality_issues:
+        exclusions.append({
+            "銘柄": symbol,
+            "時間軸": "全体",
+            "理由": "データ品質上の問題により過去検証を保留: " + " / ".join(quality_issues),
             "件数": 1,
         })
         return records, exclusions
