@@ -316,6 +316,70 @@ def test_ohlc_high_below_low():
     assert rows == [3]
 
 
+def test_ohlc_float_rounding_residuals_within_ulp_tolerance_are_not_blockers():
+    # ~1e-13 JPY residuals around a 100 JPY price are within 16 ULP.
+    high_df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, 100.0, 100.0000000000001, 100.0, 100.0],
+        high=[101.0, 101.0, 100.0, 101.0, 101.0],
+    )
+    low_df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, 100.0, 100.0, 100.0, 100.0],
+        low=[99.0, 99.0, 100.0000000000001, 99.0, 99.0],
+    )
+    range_df = make_frame(
+        NORMAL_DATES,
+        high=[101.0, 101.0, 100.0, 101.0, 101.0],
+        low=[99.0, 99.0, 100.0000000000001, 99.0, 99.0],
+    )
+
+    for frame in (high_df, low_df, range_df):
+        report = diagnose_history(frame, as_of=AS_OF)
+        assert report.price_issues["high_below_open_close"] == []
+        assert report.price_issues["low_above_open_close"] == []
+        assert report.price_issues["high_below_low"] == []
+
+
+def test_ohlc_real_contradictions_beyond_ulp_tolerance_remain_blockers():
+    high_df = make_frame(
+        NORMAL_DATES,
+        open_=[100.0, 100.0, 100.0000000000005, 100.0, 100.0],
+        high=[101.0, 101.0, 100.0, 101.0, 101.0],
+    )
+    low_df = make_frame(
+        NORMAL_DATES,
+        low=[99.0, 99.0, 100.0000000000005, 99.0, 99.0],
+    )
+    range_df = make_frame(
+        NORMAL_DATES,
+        high=[101.0, 101.0, 100.0, 101.0, 101.0],
+        low=[99.0, 99.0, 100.0000000000005, 99.0, 99.0],
+    )
+
+    assert len(diagnose_history(high_df, as_of=AS_OF).price_issues["high_below_open_close"]) == 1
+    assert len(diagnose_history(low_df, as_of=AS_OF).price_issues["low_above_open_close"]) == 1
+    assert len(diagnose_history(range_df, as_of=AS_OF).price_issues["high_below_low"]) == 1
+
+
+def test_ohlc_tolerance_scales_for_adjusted_fractional_prices():
+    tolerated = make_frame(
+        NORMAL_DATES,
+        open_=[0.012345, 0.012345, 0.012345000000000001, 0.012345, 0.012345],
+        high=[0.013, 0.013, 0.012345, 0.013, 0.013],
+    )
+    report = diagnose_history(tolerated, as_of=AS_OF)
+    assert report.price_issues["high_below_open_close"] == []
+
+    real_error = make_frame(
+        NORMAL_DATES,
+        open_=[0.012345, 0.012345, 0.012345000000001, 0.012345, 0.012345],
+        high=[0.013, 0.013, 0.012345, 0.013, 0.013],
+    )
+    report = diagnose_history(real_error, as_of=AS_OF)
+    assert len(report.price_issues["high_below_open_close"]) == 1
+
+
 def test_ohlc_non_positive():
     df = make_frame(
         NORMAL_DATES,
