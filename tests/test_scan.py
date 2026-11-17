@@ -480,8 +480,8 @@ def test_scan_price_indicators_and_scores_are_unchanged_by_volume_only_missing()
     with_missing_volume = baseline.copy(deep=True)
     with_missing_volume.iloc[10, with_missing_volume.columns.get_loc("Volume")] = float("nan")
 
-    baseline_indicators = analysis.add_indicators(baseline)
-    missing_indicators = analysis.add_indicators(with_missing_volume)
+    baseline_indicators = scan.analysis.add_indicators(baseline)
+    missing_indicators = scan.analysis.add_indicators(with_missing_volume)
 
     price_columns = [
         "EMA5", "EMA20", "EMA50", "EMA200", "RSI14",
@@ -491,14 +491,14 @@ def test_scan_price_indicators_and_scores_are_unchanged_by_volume_only_missing()
         baseline_indicators[price_columns],
         missing_indicators[price_columns],
     )
-    assert analysis.assess_all(baseline_indicators) == analysis.assess_all(missing_indicators)
+    assert scan.analysis.assess_all(baseline_indicators) == scan.analysis.assess_all(missing_indicators)
     assert pd.isna(missing_indicators["Volume_MA20"].iloc[10:30]).all()
 
 
 def test_scan_shape_recovers_volume_only_missing_rows_from_legacy_fallback():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
-    _raw, legacy_clean, error = analysis._split_raw_clean(frame)
+    _raw, legacy_clean, error = scan.analysis._split_raw_clean(frame)
     assert error is None
     shaped = scan._scanner_price_frame(legacy_clean.attrs["_quality_raw"])
     assert len(shaped) == len(frame)
@@ -525,7 +525,7 @@ def test_scan_displays_historical_missing_row_warning_without_blocking_unverifie
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
-    _, clean, error = scan.analysis._split_raw_clean(frame)
+    _, clean, error = scan.scan.analysis._split_raw_clean(frame)
     assert error is None
     universe = [("7203.T", "個別取得確認社", "テスト")]
 
