@@ -116,7 +116,7 @@ def _scanner_price_frame(raw):
     if raw is None or raw.empty:
         return pd.DataFrame()
     required = ["Open", "High", "Low", "Close"]
-    if not set(required).issubset(raw.columns):
+    if not set(analysis.NEEDED_COLUMNS).issubset(raw.columns):
         return pd.DataFrame()
     # Volume is diagnostic/supporting data, not an input to price scores.
     # Preserve its NaN so Volume_MA20 remains unavailable where appropriate,
