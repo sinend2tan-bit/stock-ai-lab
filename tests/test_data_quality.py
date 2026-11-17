@@ -179,6 +179,7 @@ def test_market_gap_counts_only_non_holiday_weekdays():
     assert r.review_gaps[0]["skipped_holidays"] == 1
     assert r.review_gaps[0]["skipped_trading_days"] == 1
     assert r.unverified_gaps == []
+    assert any("営業日欠損候補" in reason for reason in r.blocking_reasons())
 
 
 def test_partial_calendar_does_not_promote_unknown_year_gap_to_review():
