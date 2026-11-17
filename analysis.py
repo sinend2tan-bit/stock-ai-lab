@@ -29,7 +29,7 @@ def _exchange_holidays(calendar_name, start_year, end_year):
     start = f"{start_year}-01-01"
     end = f"{end_year}-12-31"
     try:
-        calendar = xcals.get_calendar(calendar_name, start=start, end=end)
+        calendar = xcals.get_calendar(calendar_name)
         sessions = {
             pd.Timestamp(session).date()
             for session in calendar.sessions_in_range(start, end)
@@ -87,7 +87,7 @@ MARKET_HOLIDAYS = {
     },
 }
 MARKET_CALENDAR_NAMES = {
-    "JP": "exchange_calendars XTKS（2021–2025）+ 手動確認（2026–2027）",
+    "JP": "JPX現物 / exchange_calendars XTKS（2021–2025）+ 手動確認（2026–2027）",
     "US": "exchange_calendars XNYS（2021–2025）+ 手動確認（2026–2027）",
 }
 
