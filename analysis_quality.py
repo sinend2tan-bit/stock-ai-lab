@@ -21,6 +21,20 @@ def assess(raw, symbol):
             market=market,
             holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         )
-        return report, report.blocking_reasons(), None
+        reasons = list(report.blocking_reasons())
+        # An interior OHLC NA is not just a harmless dropna candidate: removing
+        # that dated bar changes the indicator input sequence. Hold scores until
+        # the source row is corrected or independently verified.
+        price_columns = {"Open", "High", "Low", "Close"}
+        missing_price_rows = sorted({
+            item.get("row")
+            for item in report.missing_cells
+            if price_columns.intersection(item.get("columns", []))
+        })
+        if missing_price_rows:
+            reasons.append(
+                f"履歴中のOHLC欠損 {len(missing_price_rows)}行"
+            )
+        return report, list(dict.fromkeys(reasons)), None
     except Exception as exc:
         return None, [], f"{type(exc).__name__}: {str(exc)[:120]}"
