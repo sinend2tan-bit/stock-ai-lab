@@ -297,7 +297,10 @@ def test_scan_quality_gap_warning_ignores_official_jp_holiday():
     assert not any("判定不能" in warning for warning in warnings)
 
 
-def test_scan_quality_gap_without_calendar_is_reported_as_unverified():
+def test_scan_quality_gap_without_calendar_is_reported_as_unverified(monkeypatch):
+    # Explicitly remove calendar coverage for this test; the default calendar
+    # now correctly recognizes historical JPX holidays.
+    monkeypatch.setitem(scan.analysis.MARKET_HOLIDAYS, "JP", {})
     dates = pd.to_datetime(["2024-01-05", "2024-01-09"])
     frame = pd.DataFrame(
         {
