@@ -157,7 +157,7 @@ def show_data_quality(raw, symbol):
             "品質診断を実施できませんでした（診断不能："
             f"{diagnostic_error}）。診断不能のためスコア判定は保留します。"
         )
-        return None
+        return None, ["品質診断不能"]
     report = quality_report.to_dict()
     if blocking_reasons:
         st.error("品質上の問題があるため、このデータのスコア判定は保留します。")
@@ -239,7 +239,7 @@ def show_data_quality(raw, symbol):
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
-    return quality_report
+    return quality_report, blocking_reasons
 
 
 def _regime_at(indicators, base_date):
@@ -367,11 +367,7 @@ with tab_detail:
         else:
             df = analysis.add_indicators(clean_hist)
             show_freshness(df, selected_symbol)
-            quality_report = show_data_quality(raw_hist, selected_symbol)
-            quality_blocks = (
-                quality_report.blocking_reasons() if quality_report is not None
-                else ["品質診断不能"]
-            )
+            quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
             latest = df.iloc[-1]
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
