@@ -184,12 +184,13 @@ def clean_frame_for_forward(df):
     """
     if df is None:
         return None
-    captured = df.copy()
-    for key in (
-        "_quality_raw", "_quality_report", "_quality_diagnostic_error",
-        "rows_dropped_by_dropna", "raw_row_count",
-    ):
-        captured.attrs.pop(key, None)
+    # Build from copied Series rather than DataFrame.copy(): pandas deep-copies
+    # DataFrame.attrs, which would transiently duplicate the retained raw frame.
+    captured = pd.DataFrame(
+        {column: df[column].copy(deep=True) for column in df.columns},
+        index=df.index.copy(),
+    )
+    captured.columns = df.columns.copy()
     return captured
 
 
