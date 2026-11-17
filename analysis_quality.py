@@ -30,8 +30,6 @@ def assess(raw, symbol):
             holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
         )
         reasons = list(report.blocking_reasons())
-        if report.missing_columns:
-            reasons.append("必須列欠落：" + "、".join(report.missing_columns))
         # Historical isolated OHLC NA rows are warnings and are excluded from
         # indicator input; latest-row missing price and structural defects block.
         return report, list(dict.fromkeys(reasons)), None
@@ -40,17 +38,22 @@ def assess(raw, symbol):
 
 def scoring_frame(raw):
     """Build indicator input from valid OHLC rows while preserving Volume NA."""
-    required = ["Open", "High", "Low", "Close", "Volume"]
     price_columns = ["Open", "High", "Low", "Close"]
+    output_columns = price_columns + ["Volume"]
     if not isinstance(raw, pd.DataFrame) or raw.empty:
-        return pd.DataFrame(columns=required)
-    if raw.columns.duplicated().any() or any(col not in raw.columns for col in required):
-        return pd.DataFrame(columns=required)
+        return pd.DataFrame(columns=output_columns)
+    if raw.columns.duplicated().any() or any(col not in raw.columns for col in price_columns):
+        return pd.DataFrame(columns=output_columns)
     numeric = raw[price_columns].apply(pd.to_numeric, errors="coerce")
     valid = numeric.notna().all(axis=1) & np.isfinite(numeric).all(axis=1)
     valid &= (numeric > 0).all(axis=1)
-    frame = raw.loc[valid, required].copy()
+    frame = raw.loc[valid].copy()
     for column in price_columns:
         frame[column] = numeric.loc[valid, column]
-    frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
-    return frame
+    # Volume is not used by the current price-only indicator/score set.
+    # Preserve values if available; an absent column stays unknown, never zero.
+    if "Volume" in frame.columns:
+        frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
+    else:
+        frame["Volume"] = np.nan
+    return frame[output_columns]
