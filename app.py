@@ -165,15 +165,23 @@ def show_data_quality(raw, symbol):
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
         f"異常候補：{report['anomaly_count']}件 / "
         f"警告候補：{report['warning_count']}件 / "
-        f"日付間隔の要確認：{report['review_count']}件"
+        f"日付間隔の要確認：{report['review_count']}件 / "
+        f"休場日カレンダー不足で判定不能：{report['unverified_gap_count']}件"
     )
     if report["anomaly_count"] > 0:
         st.warning(
             f"異常候補が {report['anomaly_count']} 件あります。"
             "詳細を確認し、このデータによる分析は慎重に扱ってください。"
         )
-    elif report["warning_count"] > 0 or report["review_count"] > 0:
-        st.info("異常候補はありませんが、警告候補・要確認があります。詳細を確認してください。")
+    elif (
+        report["warning_count"] > 0
+        or report["review_count"] > 0
+        or report["unverified_gap_count"] > 0
+    ):
+        st.info(
+            "異常候補はありませんが、警告候補・要確認・カレンダー不足による判定不能があります。"
+            "詳細を確認してください。"
+        )
     else:
         st.success("異常候補・警告候補・要確認はありませんでした。")
     with st.expander("診断の詳細"):
@@ -212,12 +220,19 @@ def show_data_quality(raw, symbol):
             st.write(
                 f"• 日付間隔の要確認：{gap['from_date']} → {gap['to_date']}"
                 f"（市場営業日 {gap['skipped_trading_days']} 日分）。"
-                "週末・祝日・臨時休場の可能性があり、異常とは断定しません。"
+                "公式カレンダー上、営業日データが欠けている可能性があります。"
+            )
+        for gap in report["unverified_gaps"]:
+            years = "、".join(str(year) for year in gap["calendar_years_missing"])
+            st.write(
+                f"• 日付間隔は判定不能：{gap['from_date']} → {gap['to_date']}。"
+                f"休場日カレンダー未登録年（{years}）を含むため、営業日欠損とは判定していません。"
             )
         if (
             report["anomaly_count"] == 0
             and report["warning_count"] == 0
             and report["review_count"] == 0
+            and report["unverified_gap_count"] == 0
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
