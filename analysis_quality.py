@@ -47,9 +47,15 @@ def scoring_frame(raw):
     numeric = raw[price_columns].apply(pd.to_numeric, errors="coerce")
     valid = numeric.notna().all(axis=1) & np.isfinite(numeric).all(axis=1)
     valid &= (numeric > 0).all(axis=1)
-    frame = raw.loc[valid].copy()
+    # Never compress time across an interior invalid OHLC row. Indicators after
+    # the latest gap must be calculated only from the contiguous valid segment
+    # that follows it; otherwise pct_change/EMA windows silently bridge sessions.
+    invalid_positions = np.flatnonzero(~valid.to_numpy())
+    start = int(invalid_positions[-1] + 1) if len(invalid_positions) else 0
+    retained_positions = np.flatnonzero(valid.to_numpy()[start:]) + start
+    frame = raw.iloc[retained_positions].copy()
     for column in price_columns:
-        frame[column] = numeric.loc[valid, column]
+        frame[column] = numeric.iloc[retained_positions][column].to_numpy()
     # Volume is not used by the current price-only indicator/score set.
     # Preserve values if available; an absent column stays unknown, never zero.
     if "Volume" in frame.columns:
