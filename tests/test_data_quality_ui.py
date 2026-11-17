@@ -163,10 +163,12 @@ def test_detail_tab_malformed_price_holds_scores(monkeypatch):
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
     # 診断対象は clean ではなく raw：raw の欠損行が「dropna除外候補」として
     # 件数に現れること、分析は clean で行われスコアが出ることを確認する。
-    raw = _frame()
+    # Use a 2025 historical gap, where the built-in holiday calendar is
+    # unverified; the isolated missing row is warned, not promoted to a confirmed gap.
+    raw = _frame(n=300)
     raw.iloc[15, raw.columns.get_loc("Close")] = np.nan
     clean = raw.dropna().copy()
-    assert len(raw) == 120 and len(clean) == 119
+    assert len(raw) == 300 and len(clean) == 299
     monkeypatch.setattr(
         analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
     )
