@@ -309,7 +309,7 @@ with tab_overview:
                 quality_report, quality_blocks, quality_error = analysis_quality.assess(
                     raw_hist, sym
                 )
-                df = analysis.add_indicators(clean_hist)
+                df = analysis.add_indicators(analysis_quality.scoring_frame(raw_hist))
                 fresh = analysis.freshness_check(df, sym)
                 note = ""
                 if quality_error:
@@ -365,7 +365,7 @@ with tab_detail:
                 st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
                 show_data_quality(raw_hist, selected_symbol)
         else:
-            df = analysis.add_indicators(clean_hist)
+            df = analysis.add_indicators(analysis_quality.scoring_frame(raw_hist))
             show_freshness(df, selected_symbol)
             quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
             latest = df.iloc[-1]
