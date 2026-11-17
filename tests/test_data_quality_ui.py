@@ -85,6 +85,20 @@ def test_detail_tab_missing_volume_column_is_warning_not_score_block(monkeypatch
     assert "条件スコア" in metric_labels
     assert not any("スコア判定を保留" in t for t in texts)
 
+def test_watchlist_missing_volume_column_is_warning_only(monkeypatch):
+    raw = _frame().drop(columns=["Volume"])
+    err = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, pd.DataFrame(), err)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (pd.DataFrame(), err))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    assert any("出来高列なし" in str(element.value) for element in at.dataframe)
+    assert not any("品質保留" in str(element.value) for element in at.dataframe)
+
+
 def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
     # fail-closedでスコアも保留する。
