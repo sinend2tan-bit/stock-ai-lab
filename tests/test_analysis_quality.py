@@ -56,3 +56,30 @@ def test_diagnostic_failure_is_not_treated_as_clean(monkeypatch):
     assert report is None
     assert reasons == []
     assert error.startswith("RuntimeError:")
+
+def test_scoring_frame_keeps_price_bars_when_volume_is_missing():
+    clean = frame()
+    raw = frame()
+    raw.iloc[2, raw.columns.get_loc("Volume")] = float("nan")
+    score_frame = analysis_quality.scoring_frame(raw)
+    assert score_frame.index.equals(clean.index)
+    assert score_frame["Close"].equals(clean["Close"])
+    assert pd.isna(score_frame.iloc[2]["Volume"])
+
+    clean_indicators = analysis.add_indicators(analysis_quality.scoring_frame(clean))
+    raw_indicators = analysis.add_indicators(score_frame)
+    for column in ["EMA5", "EMA20", "EMA50", "EMA200", "RSI14", "MACD", "Return_1d_pct"]:
+        pd.testing.assert_series_equal(clean_indicators[column], raw_indicators[column], check_names=True)
+    clean_scores = analysis.assess_all(clean_indicators)
+    raw_scores = analysis.assess_all(raw_indicators)
+    for horizon in ["短期", "中期", "長期"]:
+        assert clean_scores[horizon]["score"] == raw_scores[horizon]["score"]
+        assert clean_scores[horizon]["label"] == raw_scores[horizon]["label"]
+
+
+def test_scoring_frame_omits_interior_ohlc_na_but_keeps_later_bars():
+    raw = frame()
+    raw.iloc[2, raw.columns.get_loc("Close")] = float("nan")
+    score_frame = analysis_quality.scoring_frame(raw)
+    assert len(score_frame) == len(raw) - 1
+    assert raw.index[-1] in score_frame.index
