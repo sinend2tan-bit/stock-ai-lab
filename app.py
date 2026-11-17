@@ -319,6 +319,8 @@ with tab_overview:
                 )
                 df = analysis.add_indicators(indicator_input)
                 note = ""
+                if "Volume" not in raw_hist.columns:
+                    note = "出来高列なし（価格ベース判定は継続、出来高診断は利用不可）"
                 if quality_error:
                     quality_blocks = [f"品質診断不能：{quality_error}"]
                 if df.empty:
@@ -329,7 +331,7 @@ with tab_overview:
                     fresh = analysis.freshness_check(df, sym)
                 if quality_blocks or df.empty:
                     state = "品質保留"
-                    note = " / ".join(quality_blocks)
+                    note = (note + " / " if note else "") + " / ".join(quality_blocks)
                     labels = {h: "判定保留（データ品質）" for h in ["短期", "中期", "長期"]}
                 else:
                     state = "取得成功"
