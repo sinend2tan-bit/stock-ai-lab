@@ -196,6 +196,10 @@ def _data_quality_warnings(df, symbol):
         warnings.append(f"出来高ゼロの警告候補 {report.warning_count}件")
     if report.review_count:
         warnings.append(f"日付間隔の要確認 {report.review_count}件")
+    if report.unverified_gap_count:
+        warnings.append(
+            f"休場日カレンダー不足で判定不能の間隔 {report.unverified_gap_count}件"
+        )
     return warnings
 
 

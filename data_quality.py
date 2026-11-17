@@ -7,9 +7,10 @@
   既存のスコア・ランキング・採用ゲート・銘柄ユニバース・データ取得には
   一切接続しない。既存モジュール（analysis / scan / scoring_v2 等）にも
   依存しない独立モジュールとする。
-- 日付間隔の疑わしさは、呼び出し側から公式休場日カレンダーが渡された場合は
-  それを差し引き、市場営業日が飛んでいる場合だけ「要確認」にする。
-  カレンダーがない場合・対象年が未登録の場合は従来どおり平日ベースで判定する。
+- 日付間隔の疑わしさは、対象期間の全年度について公式休場日カレンダーが
+  揃っている場合だけ市場営業日の欠損候補として「要確認」にする。
+  カレンダーがない場合・対象年が未登録の場合は「判定不能」として別記録し、
+  未知の祝日を営業日欠損と誤認しない。
 - 未来日付の判定基準は、呼び出し側が as_of（基準日）か market（市場の
   タイムゾーン指定）のどちらかを必ず明示する。実行環境のローカル日付で
   既定判定はしない（市場現地日付とずれるため）。
@@ -79,7 +80,8 @@ class DataQualityReport:
     monotonic_increasing: bool = True
     out_of_order: list = field(default_factory=list)  # {row, date, previous_date}
     future_dates: list = field(default_factory=list)  # {row, date}
-    review_gaps: list = field(default_factory=list)  # {from_date, to_date, skipped_weekdays}
+    review_gaps: list = field(default_factory=list)  # 完全な公式カレンダーで確認できたgap
+    unverified_gaps: list = field(default_factory=list)  # カレンダー不足で判定不能のgap
     # 価格の整合性（種類別の該当行・項目）
     price_issues: dict = field(default_factory=dict)
     # 出来高（ゼロは警告候補、負値・非有限値は異常候補）
@@ -115,6 +117,10 @@ class DataQualityReport:
         return len(self.review_gaps)
 
     @property
+    def unverified_gap_count(self) -> int:
+        return len(self.unverified_gaps)
+
+    @property
     def has_anomalies(self) -> bool:
         return self.anomaly_count > 0
 
@@ -134,6 +140,8 @@ class DataQualityReport:
             "out_of_order": copy.deepcopy(self.out_of_order),
             "future_dates": copy.deepcopy(self.future_dates),
             "review_gaps": copy.deepcopy(self.review_gaps),
+            "unverified_gaps": copy.deepcopy(self.unverified_gaps),
+            "unverified_gap_count": self.unverified_gap_count,
             "price_issues": copy.deepcopy(self.price_issues),
             "volume_issues": copy.deepcopy(self.volume_issues),
             "missing_per_column": dict(self.missing_per_column),
@@ -290,9 +298,9 @@ def diagnose_history(
         if ts.normalize() > as_of_ts:
             report.future_dates.append({"row": i, "date": ts.strftime("%Y-%m-%d")})
 
-    # 日付間隔の疑わしさ。週末を除いた平日数から、呼び出し側が提供した
-    # 公式休場日を差し引く。全対象年のカレンダーが揃わない場合は従来どおり
-    # 平日ベースへ戻し、未知の休場日を推測しない。
+    # 日付間隔の疑わしさ。公式カレンダーが区間の全年度を網羅するときだけ
+    # 休場日を差し引いて営業日欠損候補を判定する。未登録年を平日扱いすると
+    # 正常な祝日・年末年始を誤って欠損とするため、判定不能として分離する。
     for (i1, ts1), (i2, ts2) in zip(valid, valid[1:]):
         if ts2 <= ts1:
             continue
@@ -301,20 +309,35 @@ def diagnose_history(
         skipped_weekdays = int(np.busday_count(d1 + 1, d2))
         if skipped_weekdays < 1:
             continue
-        skipped_holidays = 0
-        years = range(ts1.year, ts2.year + 1)
-        if holidays_by_year is not None and all(
-            year in holidays_by_year for year in years
-        ):
-            known_holidays = set()
-            for year in years:
-                known_holidays.update(
-                    holiday
-                    for holiday in holidays_by_year[year]
-                    if ts1.date() < holiday < ts2.date()
-                    and holiday.weekday() < 5
-                )
-            skipped_holidays = len(known_holidays)
+        years = tuple(range(ts1.year, ts2.year + 1))
+        calendar_complete = (
+            holidays_by_year is not None
+            and all(year in holidays_by_year for year in years)
+        )
+        if not calendar_complete:
+            missing_years = [
+                year for year in years
+                if holidays_by_year is None or year not in holidays_by_year
+            ]
+            report.unverified_gaps.append(
+                {
+                    "from_date": ts1.strftime("%Y-%m-%d"),
+                    "to_date": ts2.strftime("%Y-%m-%d"),
+                    "skipped_weekdays": skipped_weekdays,
+                    "calendar_years_missing": missing_years,
+                }
+            )
+            continue
+
+        known_holidays = set()
+        for year in years:
+            known_holidays.update(
+                holiday
+                for holiday in holidays_by_year[year]
+                if ts1.date() < holiday < ts2.date()
+                and holiday.weekday() < 5
+            )
+        skipped_holidays = len(known_holidays)
         skipped_trading_days = max(0, skipped_weekdays - skipped_holidays)
         if skipped_trading_days >= 1:
             report.review_gaps.append(
