@@ -60,9 +60,10 @@ def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("異常候補" in t and "件あります" in t for t in texts)
     assert any("売買シグナルではありません" in t for t in texts)
-    # 診断があってもスコア表示は従来どおり出る（診断はスコアを変えない）
+    # OHLC矛盾はblockingなので、価格チャートは残してもスコアは公開しない。
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
+    assert any("スコア判定は保留" in t for t in texts)
 
 
 def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch):
@@ -87,7 +88,7 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
 
 def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
-    # 分析・スコア表示は従来どおり行う（診断不能表示の境界）。
+    # fail-closedでスコアも保留する。
     raw = _frame()
     clean = raw.copy()
 
@@ -106,7 +107,7 @@ def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("診断不能" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
 
 
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
@@ -130,8 +131,7 @@ def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
 
 
 def test_detail_tab_fetches_bundle_once(monkeypatch):
-    # 1銘柄・1期間あたりの外部データ取得は bundle の1回だけ
-    # （個別分析タブが取得を重複させないことの境界）。
+    # 一覧の4銘柄を各1回取得し、個別分析は選択銘柄のキャッシュを再利用する。
     raw = _frame()
     clean = raw.copy()
     calls = []
@@ -145,4 +145,5 @@ def test_detail_tab_fetches_bundle_once(monkeypatch):
     st.cache_data.clear()
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
-    assert len(calls) == 1
+    assert len(calls) == 4
+    assert {symbol for symbol, _period in calls} == {"7203.T", "6758.T", "8306.T", "9984.T"}
