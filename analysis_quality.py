@@ -16,6 +16,12 @@ def assess(raw, symbol):
     """
     if raw is None:
         return None, [], "取得データがありません"
+    if not isinstance(raw, pd.DataFrame):
+        return None, [], "取得データがDataFrameではありません"
+    if not isinstance(raw.index, pd.DatetimeIndex):
+        return None, [], "日付indexがDatetimeIndexではありません"
+    if raw.columns.duplicated().any():
+        return None, [], "取得データに重複列があります"
     try:
         market = analysis.market_of(symbol)
         report = data_quality.diagnose_history(
