@@ -369,10 +369,10 @@ def test_scan_shape_preserves_missing_row_drop_count():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
-def test_scan_displays_missing_row_drop_count_without_changing_score():
+def test_scan_displays_historical_missing_row_warning_without_blocking_unverified_gap():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
-    shaped = scan._shape(frame)
+    shaped = scan._shape(frame, symbol="7203.T")
     universe = [("7203.T", "欠損確認社", "テスト")]
 
     ranked, excluded, _ = scan.run_scan(
@@ -381,16 +381,9 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
         lambda symbol: (shaped, None),
         run_at="missing-row-warning-test",
     )
-    baseline, _, _ = scan.run_scan(
-        universe,
-        lambda symbols: {"MISSING.T": (frame.dropna().copy(), None)},
-        lambda symbol: (frame.dropna().copy(), None),
-        run_at="missing-row-baseline-test",
-    )
-
-    print("QUALITY_GATE_REASON", excluded[0]["警告・理由"] if excluded else "NO_EXCLUSION")
-    assert ranked == [] and len(excluded) == 1
-    assert "品質ゲートで分析保留" in excluded[0]["警告・理由"]
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert "判定不能" in ranked[0]["警告・理由"]
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
