@@ -19,6 +19,9 @@ MARKET_TIMEZONES = {
     "US": ZoneInfo("America/New_York"),
 }
 
+_MARKET_CALENDAR_ERRORS = {}
+
+
 def _exchange_holidays(calendar_name, start_year, end_year):
     """Build weekday closures from the pinned exchange_calendars session schedule.
 
@@ -37,10 +40,12 @@ def _exchange_holidays(calendar_name, start_year, end_year):
             pd.Timestamp(session).date()
             for session in calendar.sessions_in_range(start, end)
         }
-    except Exception:
+    except Exception as exc:
         # Keep missing years absent: callers will report gaps as unverified.
+        _MARKET_CALENDAR_ERRORS[calendar_name] = f"{type(exc).__name__}: {str(exc)[:160]}"
         return {}
     if not sessions:
+        _MARKET_CALENDAR_ERRORS[calendar_name] = "empty session schedule"
         return {}
     result = {}
     for year in range(start_year, end_year + 1):
