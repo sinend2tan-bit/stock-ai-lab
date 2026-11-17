@@ -134,32 +134,29 @@ _VOLUME_ISSUE_LABELS = {
 
 
 def show_data_quality(raw, symbol):
-    """取得直後データ（raw）の品質診断を、読み取り専用で表示する。
-
-    診断は品質情報の表示だけに使い、スコア・ランキング・銘柄選定には
-    一切使わない。診断できない場合は正常扱いにせず「診断不能」と表示する。
-    日付間隔は休場等の可能性があるため「要確認」とし、異常とは断定しない。
-    """
+    """取得直後データを診断し、個別分析のスコア表示を保留すべき理由を返す。"""
     st.markdown("**データ品質診断（取得直後データ）**")
     st.caption(
-        "診断はデータ品質の参考情報であり、売買シグナルではありません。"
-        "診断による自動除外・補正は行いません。診断結果でスコアやランキングは変えません。"
-        "診断で問題がなくても、データの正確性を保証するものではありません。"
+        "診断は売買シグナルではありません。出来高だけの問題や未確認の休場日間隔は警告として表示します。"
+        "価格データの整合性を確認できない場合、個別スコアは表示しません。"
+        "診断を通過してもデータの正確性を保証するものではありません。"
     )
     try:
         market = analysis.market_of(symbol)
-        report = data_quality.diagnose_history(
+        report_obj = data_quality.diagnose_history(
             raw,
             market=market,
             holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        ).to_dict()
-    except Exception as exc:
-        st.warning(
-            "品質診断を実施できませんでした（診断不能："
-            f"{type(exc).__name__}: {str(exc)[:120]}）。"
-            "診断不能を正常とは扱いません。分析結果は従来どおり表示します。"
         )
-        return
+        blocking_reasons = report_obj.blocking_reasons()
+        report = report_obj.to_dict()
+    except Exception as exc:
+        reason = f"データ品質診断不能（{type(exc).__name__}）"
+        st.error(
+            "品質診断を実施できませんでした。診断不能のため、個別スコア判定を保留します。"
+            f"（{type(exc).__name__}: {str(exc)[:120]}）"
+        )
+        return [reason]
     st.write(
         f"取得本数：{report['row_count']}本 / "
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
@@ -168,10 +165,14 @@ def show_data_quality(raw, symbol):
         f"日付間隔の要確認：{report['review_count']}件 / "
         f"休場日カレンダー不足で判定不能：{report['unverified_gap_count']}件"
     )
-    if report["anomaly_count"] > 0:
+    if blocking_reasons:
+        st.error("品質ゲート：個別分析スコアを保留します。")
+        for reason in blocking_reasons:
+            st.write(f"• {reason}")
+    elif report["anomaly_count"] > 0:
         st.warning(
-            f"異常候補が {report['anomaly_count']} 件あります。"
-            "詳細を確認し、このデータによる分析は慎重に扱ってください。"
+            f"警告対象のデータ品質異常が {report['anomaly_count']} 件あります。"
+            "現在のスコア計算に使わない出来高の問題などを含みます。"
         )
     elif (
         report["warning_count"] > 0
@@ -236,6 +237,7 @@ def show_data_quality(raw, symbol):
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
+    return blocking_reasons
 
 
 def _regime_at(indicators, base_date):
@@ -347,46 +349,53 @@ with tab_detail:
                 st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
                 show_data_quality(raw_hist, selected_symbol)
         else:
-            df = analysis.add_indicators(clean_hist)
-            show_freshness(df, selected_symbol)
-            show_data_quality(raw_hist, selected_symbol)
-            latest = df.iloc[-1]
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
-            c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
-            c3.metric("EMA20", f"{latest['EMA20']:.3f}")
-            c4.metric("データ最終日", str(df.index[-1].date()))
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
-            ))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
-            fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, width="stretch")
-            results = analysis.assess_all(df)
-            cols = st.columns(3)
-            for col, horizon in zip(cols, ["短期", "中期", "長期"]):
-                result = results[horizon]
-                with col:
-                    st.markdown(f"**{horizon}の条件評価**")
-                    if result["available"]:
-                        st.metric("条件スコア", result["score"])
-                    else:
-                        st.metric("条件スコア", "—")
-                    st.write(result["label"])
-                    for reason in result["reasons"]:
-                        st.write(f"• {reason}")
-                    for warning in result["warnings"]:
-                        st.warning(warning)
-            st.download_button(
-                "分析データをCSVで保存",
-                data=df.to_csv(index=True).encode("utf-8-sig"),
-                file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
-                mime="text/csv",
-            )
-            st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
+            quality_blocks = show_data_quality(raw_hist, selected_symbol)
+            if quality_blocks:
+                show_freshness(clean_hist, selected_symbol)
+                st.caption(
+                    "価格データの整合性を確認できないため、チャート・条件スコア・分析CSVは表示しません。"
+                    "取得データを更新するか、品質診断の理由を確認してください。"
+                )
+            else:
+                df = analysis.add_indicators(clean_hist)
+                show_freshness(df, selected_symbol)
+                latest = df.iloc[-1]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
+                c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
+                c3.metric("EMA20", f"{latest['EMA20']:.3f}")
+                c4.metric("データ最終日", str(df.index[-1].date()))
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
+                ))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, width="stretch")
+                results = analysis.assess_all(df)
+                cols = st.columns(3)
+                for col, horizon in zip(cols, ["短期", "中期", "長期"]):
+                    result = results[horizon]
+                    with col:
+                        st.markdown(f"**{horizon}の条件評価**")
+                        if result["available"]:
+                            st.metric("条件スコア", result["score"])
+                        else:
+                            st.metric("条件スコア", "—")
+                        st.write(result["label"])
+                        for reason in result["reasons"]:
+                            st.write(f"• {reason}")
+                        for warning in result["warnings"]:
+                            st.warning(warning)
+                st.download_button(
+                    "分析データをCSVで保存",
+                    data=df.to_csv(index=True).encode("utf-8-sig"),
+                    file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
+                    mime="text/csv",
+                )
+                st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
 
 with tab_journal:
     st.subheader("仮想売買メモ")
