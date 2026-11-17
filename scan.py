@@ -243,6 +243,10 @@ def _data_quality_assessment(df, symbol):
             return [reason], [reason]
 
     warnings = []
+    if "Volume" in report.missing_columns:
+        warnings.append(
+            "出来高列が欠落しています（現在の価格スコアはOHLCのみで計算。出来高情報は利用不可）"
+        )
     if report.rows_with_missing:
         volume_only = int(df.attrs.get("volume_only_missing_rows", 0) or 0)
         price_missing = int(df.attrs.get("rows_dropped_by_dropna", 0) or 0)
