@@ -367,6 +367,8 @@ def test_ohlc_tolerance_scales_for_adjusted_fractional_prices():
         NORMAL_DATES,
         open_=[0.012345, 0.012345, 0.012345000000000001, 0.012345, 0.012345],
         high=[0.013, 0.013, 0.012345, 0.013, 0.013],
+        low=[0.009, 0.009, 0.009, 0.009, 0.009],
+        close=[0.012345] * 5,
     )
     report = diagnose_history(tolerated, as_of=AS_OF)
     assert report.price_issues["high_below_open_close"] == []
@@ -375,6 +377,8 @@ def test_ohlc_tolerance_scales_for_adjusted_fractional_prices():
         NORMAL_DATES,
         open_=[0.012345, 0.012345, 0.012345000000001, 0.012345, 0.012345],
         high=[0.013, 0.013, 0.012345, 0.013, 0.013],
+        low=[0.009, 0.009, 0.009, 0.009, 0.009],
+        close=[0.012345] * 5,
     )
     report = diagnose_history(real_error, as_of=AS_OF)
     assert len(report.price_issues["high_below_open_close"]) == 1
