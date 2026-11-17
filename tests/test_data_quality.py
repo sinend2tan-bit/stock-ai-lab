@@ -718,6 +718,38 @@ def test_boundary_non_numeric_strings_nan_in_prices_not_in_missing():
     assert r.rows_dropped_by_dropna == 0
 
 
+def test_missing_cells_identify_price_and_volume_fields_without_double_counting():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, 100.0, 100.0, 100.0],
+        volume=[1000.0, 1000.0, np.nan, 1000.0, 1000.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.missing_cells == [
+        {"row": 2, "date": "2024-01-05", "columns": ["Volume"]}
+    ]
+    assert r.blocking_reasons() == []
+
+    price_missing = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, np.nan, 100.0, 100.0],
+    )
+    rp = diagnose_history(price_missing, as_of=AS_OF)
+    assert rp.blocking_reasons() == ["価格データ欠損 1行"]
+
+
+def test_invalid_numeric_price_string_blocks_but_true_nan_is_counted_once():
+    df = make_frame(
+        NORMAL_DATES,
+        close=["abc", 100.0, np.nan, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    reasons = r.blocking_reasons()
+    assert any("価格データ欠損 1行" in reason for reason in reasons)
+    assert any("OHLC価格異常 1件" in reason for reason in reasons)
+    assert not any("OHLC価格異常 2件" in reason for reason in reasons)
+
+
 def test_boundary_decimal_values():
     df = make_frame(
         NORMAL_DATES,
