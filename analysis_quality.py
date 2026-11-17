@@ -5,6 +5,7 @@ from __future__ import annotations
 import analysis
 import data_quality
 import numpy as np
+import pandas as pd
 
 
 def assess(raw, symbol):
