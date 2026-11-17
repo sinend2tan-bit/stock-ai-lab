@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 import analysis
+import analysis_quality
 import data_quality
 import forward
 import scan
@@ -146,20 +147,20 @@ def show_data_quality(raw, symbol):
         "診断による自動除外・補正は行いません。診断結果でスコアやランキングは変えません。"
         "診断で問題がなくても、データの正確性を保証するものではありません。"
     )
-    try:
-        market = analysis.market_of(symbol)
-        report = data_quality.diagnose_history(
-            raw,
-            market=market,
-            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        ).to_dict()
-    except Exception as exc:
+    quality_report, blocking_reasons, diagnostic_error = analysis_quality.assess(
+        raw, symbol
+    )
+    if diagnostic_error:
         st.warning(
             "品質診断を実施できませんでした（診断不能："
-            f"{type(exc).__name__}: {str(exc)[:120]}）。"
-            "診断不能を正常とは扱いません。分析結果は従来どおり表示します。"
+            f"{diagnostic_error}）。診断不能のためスコア判定は保留します。"
         )
-        return
+        return None
+    report = quality_report.to_dict()
+    if blocking_reasons:
+        st.error("品質上の問題があるため、このデータのスコア判定は保留します。")
+        for reason in blocking_reasons:
+            st.write(f"• {reason}")
     st.write(
         f"取得本数：{report['row_count']}本 / "
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
@@ -236,6 +237,7 @@ def show_data_quality(raw, symbol):
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
+    return quality_report
 
 
 def _regime_at(indicators, base_date):
@@ -293,8 +295,8 @@ with tab_overview:
         status = st.empty()
         for i, sym in enumerate(symbols):
             status.write(f"取得中：{sym}")
-            raw, err = get_history(sym, period)
-            if err is not None or raw.empty:
+            raw_hist, clean_hist, err = get_history_bundle(sym, period)
+            if err is not None or clean_hist is None or clean_hist.empty:
                 rows.append({
                     "銘柄": sym, "会社名": company_name(sym), "状態": "取得失敗", "終値": None,
                     "データ最終日": None, "本数": 0,
@@ -302,22 +304,36 @@ with tab_overview:
                     "備考": err or "データなし",
                 })
             else:
-                df = analysis.add_indicators(raw)
-                results = analysis.assess_all(df)
+                quality_report, quality_blocks, quality_error = analysis_quality.assess(
+                    raw_hist, sym
+                )
+                df = analysis.add_indicators(clean_hist)
                 fresh = analysis.freshness_check(df, sym)
                 note = ""
+                if quality_error:
+                    quality_blocks = [f"品質診断不能：{quality_error}"]
+                if quality_blocks:
+                    state = "品質保留"
+                    note = " / ".join(quality_blocks)
+                    labels = {h: "判定保留（データ品質）" for h in ["短期", "中期", "長期"]}
+                else:
+                    state = "取得成功"
+                    results = analysis.assess_all(df)
+                    labels = {
+                        "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
+                        "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
+                        "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
+                    }
                 if fresh["status"] == "stale":
-                    note = "データが古い可能性あり"
+                    note = (note + " / " if note else "") + "データが古い可能性あり"
                 elif fresh["status"] == "check":
-                    note = "最終日から間隔あり"
+                    note = (note + " / " if note else "") + "最終日から間隔あり"
                 rows.append({
-                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得成功",
+                    "銘柄": sym, "会社名": company_name(sym), "状態": state,
                     "終値": round(float(df["Close"].iloc[-1]), 3),
                     "データ最終日": str(fresh["last_date"]),
                     "本数": fresh["rows"],
-                    "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
-                    "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
-                    "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
+                    "短期": labels["短期"], "中期": labels["中期"], "長期": labels["長期"],
                     "備考": note,
                 })
             progress.progress((i + 1) / len(symbols))
@@ -349,7 +365,11 @@ with tab_detail:
         else:
             df = analysis.add_indicators(clean_hist)
             show_freshness(df, selected_symbol)
-            show_data_quality(raw_hist, selected_symbol)
+            quality_report = show_data_quality(raw_hist, selected_symbol)
+            quality_blocks = (
+                quality_report.blocking_reasons() if quality_report is not None
+                else ["品質診断不能"]
+            )
             latest = df.iloc[-1]
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
@@ -365,21 +385,26 @@ with tab_detail:
             fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
             fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
             st.plotly_chart(fig, width="stretch")
-            results = analysis.assess_all(df)
-            cols = st.columns(3)
-            for col, horizon in zip(cols, ["短期", "中期", "長期"]):
-                result = results[horizon]
-                with col:
-                    st.markdown(f"**{horizon}の条件評価**")
-                    if result["available"]:
-                        st.metric("条件スコア", result["score"])
-                    else:
-                        st.metric("条件スコア", "—")
-                    st.write(result["label"])
-                    for reason in result["reasons"]:
-                        st.write(f"• {reason}")
-                    for warning in result["warnings"]:
-                        st.warning(warning)
+            if quality_blocks:
+                st.error("データ品質の問題があるため、短期・中期・長期のスコア判定を保留しています。")
+                for reason in quality_blocks:
+                    st.write(f"• {reason}")
+            else:
+                results = analysis.assess_all(df)
+                cols = st.columns(3)
+                for col, horizon in zip(cols, ["短期", "中期", "長期"]):
+                    result = results[horizon]
+                    with col:
+                        st.markdown(f"**{horizon}の条件評価**")
+                        if result["available"]:
+                            st.metric("条件スコア", result["score"])
+                        else:
+                            st.metric("条件スコア", "—")
+                        st.write(result["label"])
+                        for reason in result["reasons"]:
+                            st.write(f"• {reason}")
+                        for warning in result["warnings"]:
+                            st.warning(warning)
             st.download_button(
                 "分析データをCSVで保存",
                 data=df.to_csv(index=True).encode("utf-8-sig"),
