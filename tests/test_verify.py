@@ -89,6 +89,204 @@ def test_tail_points_are_excluded_and_counted():
     assert tail and all(e["件数"] > 0 for e in tail)
 
 
+
+# --- 検証入力のデータ整合性ゲート ---
+
+def test_verification_rejects_duplicate_dates_without_mutating_rows():
+    frame = rising_frame(400)
+    frame.index = pd.DatetimeIndex(
+        [*frame.index[:200], frame.index[199], *frame.index[201:]]
+    )
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert len(exclusions) == 1
+    assert exclusions[0]["時間軸"] == "全体"
+    assert "重複日付" in exclusions[0]["理由"]
+
+
+def test_verification_rejects_unsorted_dates_instead_of_sorting():
+    frame = rising_frame(400)
+    frame = frame.iloc[[0, 2, 1, *range(3, len(frame))]]
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "日付順序逆転" in exclusions[0]["理由"]
+
+
+def test_verification_missing_ohlc_is_warning_and_only_overlapping_forward_windows_hold():
+    frame = rising_frame(400)
+    missing_date = frame.index[150]
+    frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records
+    assert any(
+        e["時間軸"] == "品質警告" and "履歴中のOHLC欠損" in e["理由"]
+        for e in exclusions
+    )
+    assert any(
+        "測定窓内にOHLC欠損行" in e["理由"] and e["件数"] > 0
+        for e in exclusions
+    )
+    # Evaluation dates after the missing bar can still be scored from valid OHLC history.
+    assert any(r["評価日"] > str(missing_date.date()) for r in records)
+
+
+
+def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_horizons():
+    # Non-linear data makes a one-bar off-by-one in the post-gap segment observable.
+    closes = [
+        100.0 + 0.15 * i + ((i % 9) - 4) * 0.35 + ((i % 5) - 2) * 0.2
+        for i in range(500)
+    ]
+    frame = make_frame(closes)
+    missing_pos = 50
+    frame.iloc[missing_pos, frame.columns.get_loc("Close")] = float("nan")
+    target_pos = 304  # Original-session evaluation cadence: raw positions 4, 9, ..., 304
+    records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
+    target = next(
+        r for r in records
+        if r["時間軸"] == "長期"
+        and r["評価日"] == str(frame.index[target_pos].date())
+    )
+    direct_segment = frame.iloc[missing_pos + 1 : target_pos + 1].copy()
+    direct = analysis.assess_all(
+        analysis.add_indicators(direct_segment)
+    )["長期"]
+    assert target["スコア"] == direct["score"]
+    assert target["測定日"] == str(frame.index[target_pos + verify.WINDOWS["長期"]].date())
+
+    # A missing bar must not shift the every-five-original-sessions evaluation cadence.
+    for record in records:
+        raw_pos = frame.index.get_loc(pd.Timestamp(record["評価日"]))
+        assert raw_pos % verify.EVAL_STEP == verify.EVAL_STEP - 1
+
+
+
+def test_verification_computes_indicators_once_per_evaluation_date(monkeypatch):
+    frame = rising_frame(500)
+    original = analysis.add_indicators
+    calls = []
+
+    def counted(data):
+        calls.append(data.index[-1])
+        return original(data)
+
+    monkeypatch.setattr(analysis, "add_indicators", counted)
+    records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
+    evaluated_dates = {record["評価日"] for record in records}
+    assert calls
+    assert len(calls) == len(evaluated_dates)
+
+
+def test_verification_allows_volume_only_missing_value():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("Volume")] = float("nan")
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
+
+
+
+def test_verification_allows_missing_volume_column_and_keeps_price_bars():
+    frame = rising_frame(400).drop(columns=["Volume"])
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+    assert any(
+        e["時間軸"] == "品質警告" and "出来高列が欠落" in e["理由"]
+        for e in exclusions
+    )
+
+
+
+
+def test_verify_all_allows_missing_volume_column_despite_legacy_required_column_error():
+    frame = rising_frame(400).drop(columns=["Volume"])
+    error = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, error), run_at="x"
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert "出来高列が欠落" in info[0]["理由"]
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
+def test_verify_all_allows_volume_all_missing_when_legacy_dropna_returns_empty_error():
+    frame = rising_frame(400)
+    frame["Volume"] = float("nan")
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, "取得したデータが空でした（欠損のみ）。"),
+        run_at="x",
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert any("出来高欠損行あり" in e["理由"] for e in exclusions)
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
+def test_verify_all_holds_nonempty_raw_when_fetcher_reports_normalization_error():
+    frame = rising_frame(400)
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"],
+        lambda _symbol: (frame, "取得したデータが空でした（欠損のみ）。"),
+        run_at="x",
+    )
+    assert records == []
+    assert any(e["時間軸"] == "全体" and "整形エラー" in e["理由"] for e in exclusions)
+    assert info[0]["取得"] == "品質保留"
+
+
+
+def test_verify_all_surfaces_interior_ohlc_missing_as_warning():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, None), run_at="x"
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert "履歴中のOHLC欠損" in info[0]["理由"]
+    assert any(e["時間軸"] == "品質警告" for e in exclusions)
+    assert any("測定窓内にOHLC欠損行" in e["理由"] for e in exclusions)
+
+
+
+def test_verification_rejects_nat_date_index():
+    frame = rising_frame(400)
+    idx = list(frame.index)
+    idx[150] = pd.NaT
+    frame.index = pd.DatetimeIndex(idx)
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "日付不正" in exclusions[0]["理由"]
+
+
+
+def test_verify_all_reports_quality_hold_for_non_datetime_index():
+    frame = rising_frame(400)
+    frame.index = pd.Index([str(d.date()) for d in frame.index])
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, None), run_at="x"
+    )
+    assert records == []
+    assert exclusions and exclusions[0]["時間軸"] == "全体"
+    assert info[0]["取得"] == "品質保留"
+    assert "DatetimeIndex" in info[0]["理由"]
+    assert info[0]["データ最終日"]
+
+
+
+def test_verification_rejects_invalid_ohlc_value():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("High")] = -1.0
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "OHLC価格異常" in exclusions[0]["理由"]
+
+
+
 # --- 方向の対応 ---
 
 def test_direction_from_score_thresholds():
@@ -161,7 +359,6 @@ def test_aggregate_denominator_and_pnl_exclusions():
     )
     assert bd["上昇予測"] == 1 and bd["下落予測"] == 1 and bd["中立予測"] == 1
     assert bd["判定保留"] == 0
-
 
 
 def test_aggregate_empty_symbol_horizon_has_null_coverage_not_unbound_local():
