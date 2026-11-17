@@ -89,6 +89,7 @@ class DataQualityReport:
     # 欠損の可視化
     missing_per_column: dict = field(default_factory=dict)
     rows_with_missing: int = 0
+    missing_cells: list = field(default_factory=list)  # {row, date, columns}
     rows_dropped_by_dropna: int = 0  # 既存 dropna() が除外する行数
     row_count_after_dropna: int = 0
     last_row_missing: bool = False
@@ -124,6 +125,53 @@ class DataQualityReport:
     def has_anomalies(self) -> bool:
         return self.anomaly_count > 0
 
+    def blocking_reasons(self) -> list:
+        """スコアに使う価格データの完全性に関わる問題だけを保留理由にする。
+
+        出来高だけの欠損・異常は現在のテクニカルスコアに使わないため警告扱い。
+        true NA は missing_cells で一度だけ数え、不正文字列や inf は価格異常として保留。
+        """
+        reasons = []
+        price_columns = {"Open", "High", "Low", "Close"}
+        missing_price_columns = [
+            col for col in self.missing_columns if col in price_columns
+        ]
+        if missing_price_columns:
+            reasons.append("必須価格列欠落：" + "、".join(missing_price_columns))
+        missing_price_rows = sum(
+            1 for item in self.missing_cells
+            if price_columns.intersection(item.get("columns", []))
+        )
+        if missing_price_rows:
+            reasons.append(f"価格データ欠損 {missing_price_rows}行")
+        if self.nat_count:
+            reasons.append(f"日付不正 {self.nat_count}行")
+        if self.duplicate_row_count:
+            reasons.append(f"重複日付に関係する行 {self.duplicate_row_count}行")
+        if self.out_of_order:
+            reasons.append(f"日付順序逆転 {len(self.out_of_order)}件")
+        if self.future_dates:
+            reasons.append(f"未来日付 {len(self.future_dates)}件")
+
+        missing_cells = {
+            (item["row"], col)
+            for item in self.missing_cells
+            for col in item.get("columns", [])
+        }
+        invalid_price_count = sum(
+            1 for kind, items in self.price_issues.items()
+            for item in items
+            if not (
+                kind == "non_finite"
+                and (item.get("row"), item.get("column")) in missing_cells
+            )
+        )
+        if invalid_price_count:
+            reasons.append(f"OHLC価格異常 {invalid_price_count}件")
+        if self.review_count:
+            reasons.append(f"公式カレンダー上の営業日欠損候補 {self.review_count}件")
+        return reasons
+
     def to_dict(self) -> dict:
         """辞書化する。入れ子のリスト・辞書は複製して返すため、戻り値を
         変更してもレポート内部の状態には影響しない。"""
@@ -146,6 +194,7 @@ class DataQualityReport:
             "volume_issues": copy.deepcopy(self.volume_issues),
             "missing_per_column": dict(self.missing_per_column),
             "rows_with_missing": self.rows_with_missing,
+            "missing_cells": copy.deepcopy(self.missing_cells),
             "rows_dropped_by_dropna": self.rows_dropped_by_dropna,
             "row_count_after_dropna": self.row_count_after_dropna,
             "last_row_missing": self.last_row_missing,
@@ -357,6 +406,14 @@ def diagnose_history(
         report.missing_per_column[col] = int(col_isna.sum())
         missing_row_mask |= col_isna
     report.rows_with_missing = int(missing_row_mask.sum())
+    for i in np.flatnonzero(missing_row_mask):
+        missing_cols = [
+            col for col in required_columns
+            if col in view.columns and bool(view[col].isna().iloc[i])
+        ]
+        report.missing_cells.append(
+            {"row": int(i), "date": labels[i], "columns": missing_cols}
+        )
     report.rows_dropped_by_dropna = report.rows_with_missing
     report.row_count_after_dropna = n - report.rows_with_missing
     report.last_row_missing = bool(n > 0 and missing_row_mask[-1])
