@@ -726,7 +726,7 @@ def test_missing_cells_identify_price_and_volume_fields_without_double_counting(
     )
     r = diagnose_history(df, as_of=AS_OF)
     assert r.missing_cells == [
-        {"row": 2, "date": "2024-01-05", "columns": ["Volume"]}
+        {"row": 2, "date": "2024-01-08", "columns": ["Volume"]}
     ]
     assert r.blocking_reasons() == []
 
@@ -758,7 +758,8 @@ def test_non_numeric_price_value_is_not_misclassified_as_true_missing():
     r = diagnose_history(df, as_of=AS_OF)
     assert r.rows_with_missing == 0
     assert r.missing_cells == []
-    assert len(r.price_issues["non_numeric"]) == 1
+    assert len(r.non_numeric_price_values) == 1
+    assert [e["row"] for e in r.price_issues["non_finite"]] == [0]
     assert r.blocking_reasons() == ["OHLC価格異常 1件"]
 
 
