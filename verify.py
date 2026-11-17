@@ -262,58 +262,70 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
         )
 
     closes = price_frame["Close"]
-    n = len(price_frame)
+    raw_n = len(raw)
     warmup = {h: 0 for h in HORIZONS}
     tail = {h: 0 for h in HORIZONS}
     missing_window = {h: 0 for h in HORIZONS}
     missing_eval = {h: 0 for h in HORIZONS}
 
-    # Use the original trading-session rows for evaluation dates and forward
-    # horizons. For indicators, restart from the first complete OHLC bar after
-    # the most recent interior OHLC gap; never bridge a missing bar as if two
-    # non-adjacent closes were consecutive sessions.
-    for end in range(EVAL_STEP, n + 1, EVAL_STEP):
-        i = end - 1
-        eval_date = price_frame.index[i]
-        eval_ohlc = price_frame.iloc[i][["Open", "High", "Low", "Close"]]
+    # Evaluation cadence and forward horizons are anchored to the original
+    # trading-session rows. The indicator input is a separate contiguous OHLC
+    # segment after the latest prior missing-price date.
+    missing_date_set = set(missing_ohlc_dates)
+    for raw_end in range(EVAL_STEP, raw_n + 1, EVAL_STEP):
+        raw_eval_pos = raw_end - 1
+        eval_date = raw.index[raw_eval_pos]
+        if eval_date in missing_date_set:
+            for horizon in HORIZONS:
+                missing_eval[horizon] += 1
+            continue
+
+        eval_lookup = price_frame.index.get_indexer([eval_date])
+        if len(eval_lookup) != 1 or eval_lookup[0] < 0:
+            for horizon in HORIZONS:
+                missing_eval[horizon] += 1
+            continue
+        eval_price_pos = int(eval_lookup[0])
+
+        prior_missing_dates = [
+            missing_date for missing_date in missing_ohlc_dates
+            if missing_date < eval_date
+        ]
+        # Use date lookup, not raw iloc offsets, because price_frame omits
+        # invalid OHLC rows and therefore has a different positional coordinate.
+        segment_start = (
+            int(price_frame.index.searchsorted(max(prior_missing_dates), side="right"))
+            if prior_missing_dates else 0
+        )
+        segment = price_frame.iloc[segment_start : eval_price_pos + 1]
+
         for horizon in HORIZONS:
-            if end < MIN_BARS[horizon]:
+            if raw_end < MIN_BARS[horizon] or len(segment) < MIN_BARS[horizon]:
                 warmup[horizon] += 1
                 continue
             window = WINDOWS[horizon]
-            if i + window > n - 1:
+            raw_meas_pos = raw_eval_pos + window
+            if raw_meas_pos >= raw_n:
                 tail[horizon] += 1
                 continue
-            meas_idx = i + window
-            meas_date = price_frame.index[meas_idx]
-            if eval_ohlc.isna().any():
-                missing_eval[horizon] += 1
-                continue
+            meas_date = raw.index[raw_meas_pos]
             if any(eval_date < missing_date <= meas_date for missing_date in missing_ohlc_dates):
                 missing_window[horizon] += 1
                 continue
 
-            prior_missing_dates = [
-                missing_date for missing_date in missing_ohlc_dates
-                if missing_date < eval_date
-            ]
-            # Missing positions come from raw (uncompressed) rows, so never use
-            # them directly as iloc offsets into price_frame after invalid rows
-            # have been removed. Locate the first valid bar after the latest gap.
-            segment_start = (
-                int(price_frame.index.searchsorted(max(prior_missing_dates), side="right"))
-                if prior_missing_dates else 0
-            )
-            segment = price_frame.iloc[segment_start:end]
-            if len(segment) < MIN_BARS[horizon]:
-                warmup[horizon] += 1
+            meas_lookup = price_frame.index.get_indexer([meas_date])
+            if len(meas_lookup) != 1 or meas_lookup[0] < 0:
+                # A missing measurement-date OHLC row is normally caught above;
+                # retain a defensive fail-closed guard if the index contract changes.
+                missing_window[horizon] += 1
                 continue
+            meas_price_pos = int(meas_lookup[0])
 
             result = analysis.assess_all(
                 analysis.add_indicators(segment)
             )[horizon]
-            eval_close = float(closes.iloc[i])
-            meas_close = float(closes.iloc[meas_idx])
+            eval_close = float(closes.iloc[eval_price_pos])
+            meas_close = float(closes.iloc[meas_price_pos])
             forward_pct = (meas_close / eval_close - 1.0) * 100.0 if eval_close else 0.0
 
             rec = _base_record(symbol, run_at, period_label, last_date)
