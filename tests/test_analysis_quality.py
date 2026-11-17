@@ -2,6 +2,8 @@
 
 import pandas as pd
 
+import analysis
+
 import analysis_quality
 
 
