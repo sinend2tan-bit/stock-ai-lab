@@ -499,6 +499,33 @@ def test_scanner_indicator_calculation_restarts_after_historical_ohlc_gap():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
+def test_run_scan_passes_only_latest_contiguous_ohlc_segment_to_indicators(monkeypatch):
+    frame = rising()
+    gap_position = 10
+    frame.iloc[gap_position, frame.columns.get_loc("Close")] = float("nan")
+    shaped = scan._shape(frame, symbol="7203.T")
+
+    original_add_indicators = analysis.add_indicators
+    observed_indexes = []
+
+    def record_indicator_input(segment):
+        observed_indexes.append(segment.index.copy())
+        return original_add_indicators(segment)
+
+    monkeypatch.setattr(analysis, "add_indicators", record_indicator_input)
+    scan.run_scan(
+        [("7203.T", "テスト銘柄", "合成テスト")],
+        lambda symbols: {"7203.T": (shaped, None)},
+        lambda symbol: (shaped, None),
+        run_at="synthetic-ohlc-gap-continuity",
+    )
+
+    assert len(observed_indexes) == 1
+    assert observed_indexes[0][0] == frame.index[gap_position + 1]
+    assert frame.index[gap_position - 1] not in observed_indexes[0]
+    assert frame.index[gap_position] not in observed_indexes[0]
+
+
 def test_scan_shape_retains_ohlc_bar_when_only_volume_is_missing():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
