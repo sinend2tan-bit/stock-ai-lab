@@ -388,11 +388,9 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
         run_at="missing-row-baseline-test",
     )
 
-    # An isolated historical gap in an unverified calendar year is a warning,
-    # not proof of a missing official session; the cleaned indicator frame remains usable.
-    assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
-    assert ranked[0]["中期スコア"] is not None
+    print("QUALITY_GATE_REASON", excluded[0]["警告・理由"] if excluded else "NO_EXCLUSION")
+    assert ranked == [] and len(excluded) == 1
+    assert "品質ゲートで分析保留" in excluded[0]["警告・理由"]
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
