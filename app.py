@@ -104,6 +104,12 @@ if refresh:
     st.cache_data.clear()
 
 
+def fetch_verification_history(symbol):
+    """Return raw OHLCV for verification so missing rows remain observable."""
+    raw, _clean, error = analysis.fetch_history_bundle(symbol, verify.FETCH_PERIOD)
+    return raw, error
+
+
 def show_freshness(df, symbol):
     """データの最終日・本数・新旧の暫定判定を表示する。古い場合は目立つ警告にする。"""
     fresh = analysis.freshness_check(df, symbol)
@@ -466,7 +472,7 @@ with tab_verify:
         progress_bar = st.progress(0, text="データ取得と検証計算を行っています。")
         records, exclusions, fetch_info = verify.verify_all(
             verify.VERIFY_SYMBOLS,
-            lambda s: analysis.fetch_history(s, verify.FETCH_PERIOD),
+            fetch_verification_history,
             progress=lambda done, total: progress_bar.progress(
                 done / total, text=f"検証中：{done}/{total} 銘柄"
             ),
