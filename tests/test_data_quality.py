@@ -31,6 +31,21 @@ def test_market_holiday_calendar_covers_historical_verification_years():
         assert all(year in analysis.MARKET_HOLIDAYS[market] for year in range(2021, 2028)), analysis._MARKET_CALENDAR_ERRORS
 
 
+def test_manual_2026_2027_holiday_sets_match_exchange_calendars_weekdays():
+    # Keep manual future-year lists, but cross-check their weekday closures
+    # against the pinned XTKS/XNYS schedule. Weekend dates are irrelevant to
+    # weekday-gap classification and are intentionally filtered out.
+    for market, calendar_name in (("JP", "XTKS"), ("US", "XNYS")):
+        generated = analysis._exchange_holidays(calendar_name, 2026, 2027)
+        assert all(year in generated for year in (2026, 2027)), analysis._MARKET_CALENDAR_ERRORS
+        for year in (2026, 2027):
+            manual_weekdays = {
+                day for day in analysis.MARKET_HOLIDAYS[market][year]
+                if day.weekday() < 5
+            }
+            assert manual_weekdays == set(generated[year]), (market, year)
+
+
 def test_historical_jpx_holiday_is_not_reported_as_a_missing_session():
     frame = pd.DataFrame(
         {
