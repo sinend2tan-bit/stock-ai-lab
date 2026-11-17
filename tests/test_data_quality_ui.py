@@ -66,7 +66,7 @@ def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
     assert any("スコア判定は保留" in t for t in texts)
 
 
-def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch):
+def test_detail_tab_missing_volume_column_is_warning_not_score_block(monkeypatch):
     raw = _frame().drop(columns=["Volume"])
     err = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
     monkeypatch.setattr(
@@ -77,14 +77,13 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
     texts = _all_text(at)
-    assert any("必要な列" in t for t in texts)
-    assert any("分析を保留します" in t for t in texts)
-    # 分析不可でも、取得直後データの診断（必須列欠落）は表示される
+    assert any("出来高" in t for t in texts)
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
-    assert any("必須列の欠落" in t or "異常候補" in t for t in texts)
+    # Current indicators are price-only: absent Volume remains unknown, not zero,
+    # and does not suppress otherwise valid OHLC analysis.
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" not in metric_labels
-
+    assert "条件スコア" in metric_labels
+    assert not any("スコア判定を保留" in t for t in texts)
 
 def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
