@@ -161,6 +161,22 @@ def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_
 
 
 
+def test_verification_computes_indicators_once_per_evaluation_date(monkeypatch):
+    frame = rising_frame(500)
+    original = analysis.add_indicators
+    calls = []
+
+    def counted(data):
+        calls.append(data.index[-1])
+        return original(data)
+
+    monkeypatch.setattr(analysis, "add_indicators", counted)
+    records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
+    evaluated_dates = {record["評価日"] for record in records}
+    assert calls
+    assert len(calls) == len(evaluated_dates)
+
+
 def test_verification_allows_volume_only_missing_value():
     frame = rising_frame(400)
     frame.iloc[150, frame.columns.get_loc("Volume")] = float("nan")
