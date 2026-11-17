@@ -176,16 +176,17 @@ def test_scan_diagnostic_failure_fails_closed(monkeypatch):
     assert "データ品質診断不能" in excluded[0]["警告・理由"]
 
 
-def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
+def test_scan_shape_retains_raw_and_price_bar_for_volume_only_missing_row():
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
     shaped = scan._shape(frame, symbol="7203.T")
-    assert len(shaped) == len(frame) - 1
+    assert len(shaped) == len(frame)
+    assert pd.isna(shaped["Volume"].iloc[-1])
     assert "_quality_report" in shaped.attrs
     assert shaped.attrs["_quality_report"].rows_with_missing == 1
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
-    assert any("欠損行を検出 1行" in item for item in warnings)
+    assert any("Volumeのみ欠損で価格系列に保持 1行" in item for item in warnings)
 
 
 def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
