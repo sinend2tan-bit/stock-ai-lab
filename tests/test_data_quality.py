@@ -23,6 +23,46 @@ AS_OF = "2024-12-31"
 NORMAL_DATES = ["2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09", "2024-01-10"]
 
 
+
+def test_market_holiday_calendar_covers_historical_verification_years():
+    # The 5-year verification window includes 2021–2025. These years must be
+    # explicit so a known exchange closure is not mislabeled as an unknown gap.
+    for market in ("JP", "US"):
+        assert all(year in analysis.MARKET_HOLIDAYS[market] for year in range(2021, 2028))
+
+
+def test_historical_jpx_holiday_is_not_reported_as_a_missing_session():
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0], "High": [101.0, 102.0],
+            "Low": [99.0, 100.0], "Close": [100.5, 101.5],
+            "Volume": [1000.0, 1000.0],
+        },
+        index=pd.to_datetime(["2024-02-22", "2024-02-26"]),
+    )
+    report = data_quality.diagnose_history(
+        frame, market="JP", holidays_by_year=analysis.MARKET_HOLIDAYS["JP"]
+    )
+    assert report.review_count == 0
+    assert report.unverified_gap_count == 0
+
+
+def test_historical_nyse_holiday_is_not_reported_as_a_missing_session():
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0], "High": [101.0, 102.0],
+            "Low": [99.0, 100.0], "Close": [100.5, 101.5],
+            "Volume": [1000.0, 1000.0],
+        },
+        index=pd.to_datetime(["2024-07-03", "2024-07-05"]),
+    )
+    report = data_quality.diagnose_history(
+        frame, market="US", holidays_by_year=analysis.MARKET_HOLIDAYS["US"]
+    )
+    assert report.review_count == 0
+    assert report.unverified_gap_count == 0
+
+
 def make_frame(dates, *, open_=None, high=None, low=None, close=None, volume=None):
     n = len(dates)
 
