@@ -750,6 +750,28 @@ def test_invalid_numeric_price_string_blocks_but_true_nan_is_counted_once():
     assert not any("OHLC価格異常 2件" in reason for reason in reasons)
 
 
+def test_non_numeric_price_value_is_not_misclassified_as_true_missing():
+    df = make_frame(
+        NORMAL_DATES,
+        close=["abc", 100.0, 100.0, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.rows_with_missing == 0
+    assert r.missing_cells == []
+    assert len(r.price_issues["non_numeric"]) == 1
+    assert r.blocking_reasons() == ["OHLC価格異常 1件"]
+
+
+def test_infinite_price_value_blocks_as_non_finite():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, float("inf"), 100.0, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert len(r.price_issues["non_finite"]) == 1
+    assert r.blocking_reasons() == ["OHLC価格異常 1件"]
+
+
 def test_boundary_decimal_values():
     df = make_frame(
         NORMAL_DATES,
