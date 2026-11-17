@@ -59,6 +59,19 @@ def test_non_datetime_index_is_fail_closed():
     assert error == "日付indexがDatetimeIndexではありません"
 
 
+
+def test_missing_volume_column_is_non_blocking_and_unknown():
+    data = frame().drop(columns=["Volume"])
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert error is None
+    assert report is not None
+    assert "Volume" in report.missing_columns
+    assert reasons == []
+    result = analysis_quality.scoring_frame(data)
+    assert len(result) == len(data)
+    assert result["Volume"].isna().all()
+
+
 def test_diagnostic_failure_is_not_treated_as_clean(monkeypatch):
     def fail(_symbol):
         raise RuntimeError("market mapping unavailable")
