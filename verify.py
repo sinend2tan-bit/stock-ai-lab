@@ -204,6 +204,18 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             "履歴中のOHLC欠損行を指標入力から除外（測定窓に含む評価地点は時間軸別に保留）",
             len(missing_ohlc_dates),
         )
+    if report.unverified_gap_count:
+        add_exclusion(
+            "品質警告",
+            "休場日カレンダーの対象年不足により日付間隔を確定できない",
+            int(report.unverified_gap_count),
+        )
+    if report.warning_count:
+        add_exclusion(
+            "品質警告",
+            "出来高などの警告候補あり（価格スコアは変更せず、原データを保持）",
+            int(report.warning_count),
+        )
 
     closes = price_frame["Close"]
     n = len(price_frame)
@@ -327,10 +339,10 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                 (e for e in excls if e.get("時間軸") == "全体"),
                 None,
             )
-            quality_warning = next(
-                (e for e in excls if e.get("時間軸") == "品質警告"),
-                None,
-            )
+            quality_warnings = [
+                e for e in excls if e.get("時間軸") == "品質警告"
+            ]
+            quality_warning = quality_warnings[0] if quality_warnings else None
             try:
                 parsed_last = pd.to_datetime(raw.index[-1], errors="coerce")
                 last_date = "" if pd.isna(parsed_last) else str(parsed_last.date())
@@ -344,7 +356,7 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                 "本数": len(raw),
                 "データ最終日": last_date,
                 "理由": quality_exclusion["理由"] if quality_exclusion else (
-                    quality_warning["理由"] if quality_warning else ""
+                    " / ".join(e["理由"] for e in quality_warnings)
                 ),
             })
         if progress is not None:
