@@ -227,6 +227,7 @@ def test_scan_quality_gate_synthetic_60_ticker_universe_exclusion_reasons():
                     frame.iloc[10]["Close"] * 0.5
                 )
             elif defect == "malformed_price":
+                frame["Close"] = frame["Close"].astype(object)
                 frame.iloc[10, frame.columns.get_loc("Close")] = "not-a-price"
             frames[symbol] = frame
             universe.append((symbol, symbol, "合成テスト"))
