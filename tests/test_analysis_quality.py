@@ -47,6 +47,16 @@ def test_ohlc_contradiction_blocks_score():
     assert any("OHLC価格異常" in reason for reason in reasons)
 
 
+
+def test_non_datetime_index_is_fail_closed():
+    data = frame()
+    data.index = pd.Index([str(value.date()) for value in data.index])
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert report is None
+    assert reasons == []
+    assert error == "日付indexがDatetimeIndexではありません"
+
+
 def test_diagnostic_failure_is_not_treated_as_clean(monkeypatch):
     def fail(_symbol):
         raise RuntimeError("market mapping unavailable")
