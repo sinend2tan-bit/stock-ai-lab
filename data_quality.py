@@ -64,6 +64,20 @@ def _naive(ts: pd.Timestamp) -> pd.Timestamp:
     return ts
 
 
+def _ohlc_float_tolerance(*values) -> float:
+    """OHLC比較用の丸め許容幅。値のスケールに対する16 ULPのみ許容する。
+
+    固定epsilonは低価格の調整済み株価に対して過大になり得るため使わない。
+    価格スケールの浮動小数点間隔（ULP）を基準にし、実データの意味ある
+    価格差は引き続き異常として検出する。
+    """
+    finite = [abs(float(value)) for value in values if np.isfinite(value)]
+    if not finite:
+        return 0.0
+    scale = max(finite)
+    return float(16.0 * np.spacing(scale))
+
+
 @dataclass
 class DataQualityReport:
     """diagnose_history の診断結果。値はすべて入力から読み取った事実のみ。"""
@@ -492,7 +506,8 @@ def diagnose_history(
             if not refs:
                 continue
             ref_max = max(v for _, v in refs)
-            if h < ref_max:
+            tolerance = _ohlc_float_tolerance(h, ref_max)
+            if ref_max - h > tolerance:
                 if len(refs) == 2:
                     detail = f"High={h} < max(Open, Close)={ref_max}"
                 else:
@@ -514,7 +529,8 @@ def diagnose_history(
             if not refs:
                 continue
             ref_min = min(v for _, v in refs)
-            if low_v > ref_min:
+            tolerance = _ohlc_float_tolerance(low_v, ref_min)
+            if low_v - ref_min > tolerance:
                 if len(refs) == 2:
                     detail = f"Low={low_v} > min(Open, Close)={ref_min}"
                 else:
@@ -525,7 +541,8 @@ def diagnose_history(
     if "High" in arrays and "Low" in arrays:
         for i in range(n):
             h, low = arrays["High"][i], arrays["Low"][i]
-            if np.isfinite(h) and np.isfinite(low) and h < low:
+            tolerance = _ohlc_float_tolerance(h, low)
+            if np.isfinite(h) and np.isfinite(low) and low - h > tolerance:
                 price_issues["high_below_low"].append(
                     {"row": i, "date": labels[i], "column": "High/Low",
                      "detail": f"High={h} < Low={low}"}
