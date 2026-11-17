@@ -139,6 +139,20 @@ def test_verification_allows_volume_only_missing_value():
 
 
 
+
+def test_verify_all_holds_nonempty_raw_when_fetcher_reports_normalization_error():
+    frame = rising_frame(400)
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"],
+        lambda _symbol: (frame, "取得したデータが空でした（欠損のみ）。"),
+        run_at="x",
+    )
+    assert records == []
+    assert any(e["時間軸"] == "全体" and "整形エラー" in e["理由"] for e in exclusions)
+    assert info[0]["取得"] == "品質保留"
+
+
+
 def test_verify_all_surfaces_interior_ohlc_missing_as_warning():
     frame = rising_frame(400)
     frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
