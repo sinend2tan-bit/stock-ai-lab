@@ -275,6 +275,51 @@ def _data_quality_warnings(df, symbol):
     return _data_quality_assessment(df, symbol)[0]
 
 
+def _add_indicators_by_valid_ohlc_segments(raw):
+    """Historical invalid OHLC rows break indicator continuity.
+
+    The quality gate blocks structural price anomalies and confirmed missing
+    trading sessions before this function is called. Isolated historical OHLC
+    NA rows are non-blocking, so only the latest contiguous valid OHLC
+    segment is passed to scoring. This also keeps row-offset return horizons
+    from crossing an earlier missing-price gap.
+    Volume missingness does not split a price-only indicator segment.
+    """
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    required = ["Open", "High", "Low", "Close"]
+    if raw.columns.duplicated().any() or any(col not in raw.columns for col in required):
+        return pd.DataFrame()
+
+    numeric = raw[required].apply(pd.to_numeric, errors="coerce")
+    values = numeric.to_numpy(dtype=float)
+    valid = (
+        numeric.notna().all(axis=1).to_numpy()
+        & np.isfinite(values).all(axis=1)
+        & (values > 0).all(axis=1)
+    )
+    valid_positions = np.flatnonzero(valid)
+    if valid_positions.size == 0:
+        return pd.DataFrame()
+
+    # Downstream horizon-return calculations operate on row offsets. Returning
+    # multiple segments concatenated together would still let those returns
+    # bridge a gap even if rolling indicators were calculated separately.
+    # Match the individual-analysis path: score only the latest contiguous
+    # valid OHLC suffix.
+    split_points = np.flatnonzero(np.diff(valid_positions) > 1)
+    latest_start = int(split_points[-1] + 1) if split_points.size else 0
+    positions = valid_positions[latest_start:]
+    segment = raw.iloc[positions].copy()
+    for column in required:
+        segment[column] = numeric.iloc[positions][column].to_numpy(dtype=float)
+    if "Volume" not in segment.columns:
+        segment["Volume"] = np.nan
+    else:
+        segment["Volume"] = pd.to_numeric(segment["Volume"], errors="coerce")
+    return analysis.add_indicators(segment)
+
+
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
     """スキャンを実行する。
 
@@ -357,14 +402,17 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 if progress is not None:
                     progress(done, len(universe))
                 continue
-            # Remove the retained raw frame before indicator copies to avoid carrying
-            # a large diagnostic-only DataFrame through the analysis pipeline.
+            # Keep the original raw frame long enough to preserve historical
+            # OHLC NA rows as segment boundaries during indicator calculation.
+            indicator_source = raw.attrs.get("_quality_raw", raw)
+            # Remove diagnostic-only attributes from the shaped frame before
+            # indicator copies so the large raw frame is not propagated.
             for key in (
                 "_quality_raw", "_quality_report", "_quality_diagnostic_error",
                 "rows_dropped_by_dropna", "raw_row_count", "volume_only_missing_rows",
             ):
                 raw.attrs.pop(key, None)
-            df = analysis.add_indicators(raw)
+            df = _add_indicators_by_valid_ohlc_segments(indicator_source)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
             mid = results["中期"]
