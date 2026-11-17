@@ -138,7 +138,7 @@ def test_stale_data_goes_to_excluded():
     assert "古い可能性" in excluded[0]["警告・理由"]
 
 
-def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
+def test_scan_holds_invalid_ohlc_before_ranking(monkeypatch):
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("High")] = (
         frame.iloc[-1]["Close"] * 0.5
@@ -150,9 +150,46 @@ def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
         lambda symbol: (frame, None),
         run_at="quality-warning-test",
     )
-    assert len(ranked) == 1
-    assert excluded == []
-    assert "データ品質の異常候補" in ranked[0]["警告・理由"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "OHLC価格異常" in excluded[0]["警告・理由"]
+
+
+def test_scan_diagnostic_failure_fails_closed(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("diagnostic unavailable")
+
+    monkeypatch.setattr(scan.data_quality, "diagnose_history", fail)
+    frame = rising()
+    universe = [("DIAGFAIL.T", "診断失敗社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"DIAGFAIL.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="quality-diagnostic-failure-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "データ品質診断不能" in excluded[0]["警告・理由"]
+
+
+def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
+    shaped = scan._shape(frame, symbol="7203.T")
+    assert len(shaped) == len(frame) - 1
+    assert "_quality_raw" in shaped.attrs
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert blocks == []
+    assert any("欠損行 1行" in item for item in warnings)
+
+
+def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
+    shaped = scan._shape(frame, symbol="7203.T")
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert any("価格データ欠損 1行" in item for item in blocks)
 
 
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
