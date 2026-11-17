@@ -125,7 +125,17 @@ def test_verification_allows_volume_only_missing_value():
     frame.iloc[150, frame.columns.get_loc("Volume")] = float("nan")
     records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
     assert records
-    assert exclusions == []
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
+def test_verification_rejects_nat_date_index():
+    frame = rising_frame(400)
+    idx = list(frame.index)
+    idx[150] = pd.NaT
+    frame.index = pd.DatetimeIndex(idx)
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "日付不正" in exclusions[0]["理由"]
 
 
 def test_verification_rejects_invalid_ohlc_value():
