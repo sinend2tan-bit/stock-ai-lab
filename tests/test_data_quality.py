@@ -28,7 +28,7 @@ def test_market_holiday_calendar_covers_historical_verification_years():
     # The 5-year verification window includes 2021–2025. These years must be
     # explicit so a known exchange closure is not mislabeled as an unknown gap.
     for market in ("JP", "US"):
-        assert all(year in analysis.MARKET_HOLIDAYS[market] for year in range(2021, 2028))
+        assert all(year in analysis.MARKET_HOLIDAYS[market] for year in range(2021, 2028)), analysis._MARKET_CALENDAR_ERRORS
 
 
 def test_manual_2026_2027_holiday_sets_match_pinned_exchange_calendars():
