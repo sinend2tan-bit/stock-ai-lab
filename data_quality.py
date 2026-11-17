@@ -441,7 +441,6 @@ def diagnose_history(
     # ---- 価格の整合性 ----
     price_issues = {
         "non_finite": [],
-        "non_numeric": [],
         "non_positive": [],
         "high_below_open_close": [],
         "low_above_open_close": [],
