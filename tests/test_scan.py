@@ -178,7 +178,8 @@ def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
     frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
     shaped = scan._shape(frame, symbol="7203.T")
     assert len(shaped) == len(frame) - 1
-    assert "_quality_raw" in shaped.attrs
+    assert "_quality_report" in shaped.attrs
+    assert shaped.attrs["_quality_report"].rows_with_missing == 1
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
     assert any("欠損行 1行" in item for item in warnings)
