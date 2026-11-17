@@ -275,13 +275,7 @@ def test_clean_frame_for_forward_strips_raw_diagnostic_attrs():
     captured = scan.clean_frame_for_forward(frame)
 
     assert captured.equals(frame)
-    assert all(
-        key not in captured.attrs
-        for key in (
-            "_quality_raw", "_quality_report", "_quality_diagnostic_error",
-            "rows_dropped_by_dropna", "raw_row_count",
-        )
-    )
+    assert captured.attrs == {}
     # Sanitization is non-mutating; scan can still consume the original metadata.
     assert "_quality_raw" in frame.attrs
 
