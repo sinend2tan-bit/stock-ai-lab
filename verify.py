@@ -346,6 +346,9 @@ def aggregate(records, exclusions=None):
             if sub.empty:
                 counts = {j: 0 for j in JUDGED}
                 denom, hit_rate = 0, None
+                directional_predictions = 0
+                directional_coverage = None
+                hit_rate_coverage = None
             else:
                 (
                     counts, denom, hit_rate, _, _, _, directional_predictions,
