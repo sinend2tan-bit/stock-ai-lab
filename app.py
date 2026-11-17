@@ -374,9 +374,9 @@ with tab_detail:
                 show_data_quality(raw_hist, selected_symbol)
         else:
             indicator_input = analysis_quality.scoring_frame(raw_hist)
-                if indicator_input.empty:
-                    indicator_input = clean_hist
-                df = analysis.add_indicators(indicator_input)
+            if indicator_input.empty:
+                indicator_input = clean_hist
+            df = analysis.add_indicators(indicator_input)
             quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
             if df.empty:
                 st.error("有効なOHLC価格行がないため、チャート・指標・スコアを表示できません。")
