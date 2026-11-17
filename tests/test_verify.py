@@ -89,6 +89,54 @@ def test_tail_points_are_excluded_and_counted():
     assert tail and all(e["件数"] > 0 for e in tail)
 
 
+
+# --- 検証入力のデータ整合性ゲート ---
+
+def test_verification_rejects_duplicate_dates_without_mutating_rows():
+    frame = rising_frame(400)
+    frame.index = pd.DatetimeIndex(
+        [*frame.index[:200], frame.index[199], *frame.index[201:]]
+    )
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert len(exclusions) == 1
+    assert exclusions[0]["時間軸"] == "全体"
+    assert "重複日付" in exclusions[0]["理由"]
+
+
+def test_verification_rejects_unsorted_dates_instead_of_sorting():
+    frame = rising_frame(400)
+    frame = frame.iloc[[0, 2, 1, *range(3, len(frame))]]
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "日付順序逆転" in exclusions[0]["理由"]
+
+
+def test_verification_rejects_interior_ohlc_missing_row():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "履歴中のOHLC欠損" in exclusions[0]["理由"]
+
+
+def test_verification_allows_volume_only_missing_value():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("Volume")] = float("nan")
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records
+    assert exclusions == []
+
+
+def test_verification_rejects_invalid_ohlc_value():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("High")] = -1.0
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records == []
+    assert "OHLC価格異常" in exclusions[0]["理由"]
+
+
+
 # --- 方向の対応 ---
 
 def test_direction_from_score_thresholds():
