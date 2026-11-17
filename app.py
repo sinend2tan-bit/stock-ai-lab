@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 import analysis
+import analysis_quality
 import data_quality
 import forward
 import scan
@@ -134,32 +135,41 @@ _VOLUME_ISSUE_LABELS = {
 
 
 def show_data_quality(raw, symbol):
-    """取得直後データ（raw）の品質診断を、読み取り専用で表示する。
+    """取得直後データ（raw）の品質診断を表示し、スコア公開可否にも使う。
 
-    診断は品質情報の表示だけに使い、スコア・ランキング・銘柄選定には
-    一切使わない。診断できない場合は正常扱いにせず「診断不能」と表示する。
-    日付間隔は休場等の可能性があるため「要確認」とし、異常とは断定しない。
+    blocking理由がある場合、または診断不能の場合はスコア・ランキングを
+    保留する。warning-onlyの項目はスコア式を変更しない。価格データの
+    自動補正は行わない。日付間隔は休場等の可能性があるため「要確認」とし、
+    異常とは断定しない。
     """
     st.markdown("**データ品質診断（取得直後データ）**")
     st.caption(
-        "診断はデータ品質の参考情報であり、売買シグナルではありません。"
-        "診断による自動除外・補正は行いません。診断結果でスコアやランキングは変えません。"
-        "診断で問題がなくても、データの正確性を保証するものではありません。"
+        "診断は売買シグナルではありません。価格データの自動補正は行いません。"
+        "blocking理由がある場合や診断不能の場合は、スコア・ランキングを保留します。"
+        "警告のみの場合はスコア式を変更しません。診断で問題がなくても、"
+        "データの正確性を保証するものではありません。"
     )
-    try:
-        market = analysis.market_of(symbol)
-        report = data_quality.diagnose_history(
-            raw,
-            market=market,
-            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        ).to_dict()
-    except Exception as exc:
+    quality_report, blocking_reasons, diagnostic_error = analysis_quality.assess(
+        raw, symbol
+    )
+    if diagnostic_error:
         st.warning(
             "品質診断を実施できませんでした（診断不能："
-            f"{type(exc).__name__}: {str(exc)[:120]}）。"
-            "診断不能を正常とは扱いません。分析結果は従来どおり表示します。"
+            f"{diagnostic_error}）。診断不能のためスコア判定は保留します。"
         )
-        return
+        return None, ["品質診断不能"]
+    report = quality_report.to_dict()
+    # Diagnose the normalized report, not the raw column index: yfinance may
+    # return a one-ticker MultiIndex even after the data is logically single-symbol.
+    if "Volume" in report["missing_columns"]:
+        st.warning(
+            "出来高列が欠落しています。現在の条件スコアはOHLC価格ベースのため、"
+            "価格分析は継続します。出来高に関する診断は利用できません。"
+        )
+    if blocking_reasons:
+        st.error("品質上の問題があるため、このデータのスコア判定は保留します。")
+        for reason in blocking_reasons:
+            st.write(f"• {reason}")
     st.write(
         f"取得本数：{report['row_count']}本 / "
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
@@ -236,6 +246,7 @@ def show_data_quality(raw, symbol):
             and not report["missing_columns"]
         ):
             st.write("詳細に表示する項目はありません。")
+    return quality_report, blocking_reasons
 
 
 def _regime_at(indicators, base_date):
@@ -293,31 +304,55 @@ with tab_overview:
         status = st.empty()
         for i, sym in enumerate(symbols):
             status.write(f"取得中：{sym}")
-            raw, err = get_history(sym, period)
-            if err is not None or raw.empty:
+            raw_hist, clean_hist, err = get_history_bundle(sym, period)
+            indicator_input = analysis_quality.scoring_frame(raw_hist)
+            if raw_hist is None or raw_hist.empty or indicator_input.empty:
                 rows.append({
-                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得失敗", "終値": None,
-                    "データ最終日": None, "本数": 0,
-                    "短期": "—", "中期": "—", "長期": "—",
-                    "備考": err or "データなし",
+                    "銘柄": sym, "会社名": company_name(sym),
+                    "状態": "品質保留" if raw_hist is not None and not raw_hist.empty else "取得失敗",
+                    "終値": None, "データ最終日": None, "本数": 0,
+                    "短期": "判定保留（データ品質）", "中期": "判定保留（データ品質）",
+                    "長期": "判定保留（データ品質）",
+                    "備考": err or "有効なOHLC価格行がありません",
                 })
             else:
-                df = analysis.add_indicators(raw)
-                results = analysis.assess_all(df)
-                fresh = analysis.freshness_check(df, sym)
+                quality_report, quality_blocks, quality_error = analysis_quality.assess(
+                    raw_hist, sym
+                )
+                df = analysis.add_indicators(indicator_input)
                 note = ""
+                if "Volume" not in raw_hist.columns:
+                    note = "出来高列なし（価格ベース判定は継続、出来高診断は利用不可）"
+                if quality_error:
+                    quality_blocks = [f"品質診断不能：{quality_error}"]
+                if df.empty:
+                    quality_blocks = list(quality_blocks or [])
+                    quality_blocks.append("有効なOHLC価格行がありません")
+                    fresh = {"status": "check", "last_date": None, "rows": 0}
+                else:
+                    fresh = analysis.freshness_check(df, sym)
+                if quality_blocks or df.empty:
+                    state = "品質保留"
+                    note = (note + " / " if note else "") + " / ".join(quality_blocks)
+                    labels = {h: "判定保留（データ品質）" for h in ["短期", "中期", "長期"]}
+                else:
+                    state = "取得成功"
+                    results = analysis.assess_all(df)
+                    labels = {
+                        "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
+                        "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
+                        "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
+                    }
                 if fresh["status"] == "stale":
-                    note = "データが古い可能性あり"
+                    note = (note + " / " if note else "") + "データが古い可能性あり"
                 elif fresh["status"] == "check":
-                    note = "最終日から間隔あり"
+                    note = (note + " / " if note else "") + "最終日から間隔あり"
                 rows.append({
-                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得成功",
-                    "終値": round(float(df["Close"].iloc[-1]), 3),
-                    "データ最終日": str(fresh["last_date"]),
+                    "銘柄": sym, "会社名": company_name(sym), "状態": state,
+                    "終値": round(float(df["Close"].iloc[-1]), 3) if not df.empty else None,
+                    "データ最終日": str(fresh["last_date"]) if fresh["last_date"] is not None else None,
                     "本数": fresh["rows"],
-                    "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
-                    "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
-                    "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
+                    "短期": labels["短期"], "中期": labels["中期"], "長期": labels["長期"],
                     "備考": note,
                 })
             progress.progress((i + 1) / len(symbols))
@@ -340,53 +375,63 @@ with tab_detail:
     else:
         st.markdown(f"**対象銘柄：{analysis.display_label(selected_symbol, company_name(selected_symbol))}**")
         raw_hist, clean_hist, err = get_history_bundle(selected_symbol, period)
-        if err is not None:
-            st.error("データを取得できませんでした。" + err)
-            st.write("銘柄コードを確認するか、時間をおいて「データを取得・更新」を押してください。取得できない場合は、その旨を表示するだけで、有料データへは切り替えません。")
-            if not raw_hist.empty:
-                st.write("取得直後データはありますが、分析に使える形に整わなかったため、分析は行いません。取得直後データの品質診断は次のとおりです。")
+        indicator_input = analysis_quality.scoring_frame(raw_hist)
+        if raw_hist is None or raw_hist.empty or indicator_input.empty:
+            st.error("有効なOHLC価格行がないため、分析を保留します。" + (err or ""))
+            st.write("データ取得状態と品質診断を確認してください。")
+            if raw_hist is not None and not raw_hist.empty:
                 show_data_quality(raw_hist, selected_symbol)
         else:
-            df = analysis.add_indicators(clean_hist)
-            show_freshness(df, selected_symbol)
-            show_data_quality(raw_hist, selected_symbol)
-            latest = df.iloc[-1]
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
-            c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
-            c3.metric("EMA20", f"{latest['EMA20']:.3f}")
-            c4.metric("データ最終日", str(df.index[-1].date()))
-            fig = go.Figure()
-            fig.add_trace(go.Candlestick(
-                x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
-            ))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
-            fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
-            fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
-            st.plotly_chart(fig, width="stretch")
-            results = analysis.assess_all(df)
-            cols = st.columns(3)
-            for col, horizon in zip(cols, ["短期", "中期", "長期"]):
-                result = results[horizon]
-                with col:
-                    st.markdown(f"**{horizon}の条件評価**")
-                    if result["available"]:
-                        st.metric("条件スコア", result["score"])
-                    else:
-                        st.metric("条件スコア", "—")
-                    st.write(result["label"])
-                    for reason in result["reasons"]:
+            df = analysis.add_indicators(indicator_input)
+            quality_report, quality_blocks = show_data_quality(raw_hist, selected_symbol)
+            if df.empty:
+                st.error("有効なOHLC価格行がないため、チャート・指標・スコアを表示できません。")
+                for reason in quality_blocks or ["有効なOHLC価格行がありません"]:
+                    st.write(f"• {reason}")
+            else:
+                show_freshness(df, selected_symbol)
+                latest = df.iloc[-1]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("最新終値（調整後）", f"{latest['Close']:.3f}")
+                c2.metric("RSI(14)", "—" if pd.isna(latest["RSI14"]) else f"{latest['RSI14']:.1f}")
+                c3.metric("EMA20", f"{latest['EMA20']:.3f}")
+                c4.metric("データ最終日", str(df.index[-1].date()))
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(
+                    x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="価格"
+                ))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA20"], name="EMA20"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA50"], name="EMA50"))
+                fig.add_trace(go.Scatter(x=df.index, y=df["EMA200"], name="EMA200"))
+                fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=30, b=10))
+                st.plotly_chart(fig, width="stretch")
+                if quality_blocks:
+                    st.error("データ品質の問題があるため、短期・中期・長期のスコア判定を保留しています。")
+                    for reason in quality_blocks:
                         st.write(f"• {reason}")
-                    for warning in result["warnings"]:
-                        st.warning(warning)
-            st.download_button(
-                "分析データをCSVで保存",
-                data=df.to_csv(index=True).encode("utf-8-sig"),
-                file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
-                mime="text/csv",
-            )
-            st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
+                else:
+                    results = analysis.assess_all(df)
+                    cols = st.columns(3)
+                    for col, horizon in zip(cols, ["短期", "中期", "長期"]):
+                        result = results[horizon]
+                        with col:
+                            st.markdown(f"**{horizon}の条件評価**")
+                            if result["available"]:
+                                st.metric("条件スコア", result["score"])
+                            else:
+                                st.metric("条件スコア", "—")
+                            st.write(result["label"])
+                            for reason in result["reasons"]:
+                                st.write(f"• {reason}")
+                            for warning in result["warnings"]:
+                                st.warning(warning)
+                st.download_button(
+                    "分析データをCSVで保存",
+                    data=df.to_csv(index=True).encode("utf-8-sig"),
+                    file_name=f"{selected_symbol.replace('.', '_')}_analysis.csv",
+                    mime="text/csv",
+                )
+                st.caption("短期判定も日足データに基づきます。1分足・5分足のリアルタイムデイトレード判定ではありません。")
 
 with tab_journal:
     st.subheader("仮想売買メモ")

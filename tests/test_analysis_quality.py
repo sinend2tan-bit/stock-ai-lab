@@ -1,0 +1,155 @@
+"""Shared quality assessment contract for individual analysis and watchlist."""
+
+import pandas as pd
+
+import analysis
+
+import analysis_quality
+
+
+def frame():
+    idx = pd.bdate_range("2026-10-01", periods=6)
+    close = [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+    return pd.DataFrame(
+        {
+            "Open": close,
+            "High": [v + 1 for v in close],
+            "Low": [v - 1 for v in close],
+            "Close": close,
+            "Volume": [1000] * len(close),
+        },
+        index=idx,
+    )
+
+
+def test_clean_price_data_is_eligible():
+    report, reasons, error = analysis_quality.assess(frame(), "7203.T")
+    assert error is None
+    assert report is not None
+    assert reasons == []
+
+
+def test_volume_only_missing_is_warning_not_score_blocker():
+    data = frame()
+    data.iloc[2, data.columns.get_loc("Volume")] = float("nan")
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert error is None
+    assert report is not None
+    assert reasons == []
+    assert report.volume_issues["non_finite"]
+
+
+
+def test_ohlc_contradiction_blocks_score():
+    data = frame()
+    data.iloc[2, data.columns.get_loc("High")] = 90.0
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert error is None
+    assert report is not None
+    assert any("OHLC価格異常" in reason for reason in reasons)
+
+
+
+def test_non_datetime_index_is_fail_closed():
+    data = frame()
+    data.index = pd.Index([str(value.date()) for value in data.index])
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert report is None
+    assert reasons == []
+    assert error == "日付indexがDatetimeIndexではありません"
+
+
+
+def test_missing_volume_column_is_non_blocking_and_unknown():
+    data = frame().drop(columns=["Volume"])
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert error is None
+    assert report is not None
+    assert "Volume" in report.missing_columns
+    assert reasons == []
+    result = analysis_quality.scoring_frame(data)
+    assert len(result) == len(data)
+    assert result["Volume"].isna().all()
+
+
+def test_diagnostic_failure_is_not_treated_as_clean(monkeypatch):
+    def fail(_symbol):
+        raise RuntimeError("market mapping unavailable")
+
+    monkeypatch.setattr("analysis_quality.analysis.market_of", fail)
+    report, reasons, error = analysis_quality.assess(frame(), "7203.T")
+    assert report is None
+    assert reasons == []
+    assert error.startswith("RuntimeError:")
+
+def test_scoring_frame_keeps_price_bars_when_volume_is_missing():
+    idx = pd.bdate_range("2024-01-02", periods=320)
+    close = [100.0 + i * 0.08 + (i % 7) * 0.03 for i in range(len(idx))]
+    clean = pd.DataFrame(
+        {
+            "Open": close,
+            "High": [value + 0.5 for value in close],
+            "Low": [value - 0.5 for value in close],
+            "Close": close,
+            "Volume": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+    raw = clean.copy()
+    raw.iloc[150, raw.columns.get_loc("Volume")] = float("nan")
+    score_frame = analysis_quality.scoring_frame(raw)
+    assert score_frame.index.equals(clean.index)
+    assert score_frame["Close"].equals(clean["Close"])
+    assert pd.isna(score_frame.loc[idx[150], "Volume"])
+
+    clean_indicators = analysis.add_indicators(analysis_quality.scoring_frame(clean))
+    raw_indicators = analysis.add_indicators(score_frame)
+    for column in ["EMA5", "EMA20", "EMA50", "EMA200", "RSI14", "MACD", "Return_1d_pct"]:
+        pd.testing.assert_series_equal(clean_indicators[column], raw_indicators[column], check_names=True)
+    clean_scores = analysis.assess_all(clean_indicators)
+    raw_scores = analysis.assess_all(raw_indicators)
+    for horizon in ["短期", "中期", "長期"]:
+        assert clean_scores[horizon]["score"] == raw_scores[horizon]["score"]
+        assert clean_scores[horizon]["label"] == raw_scores[horizon]["label"]
+
+
+def test_scoring_frame_restarts_on_contiguous_segment_after_interior_ohlc_gap():
+    idx = pd.bdate_range("2024-01-02", periods=320)
+    close = [100.0 + i * 0.08 + ((i % 9) - 4) * 0.13 for i in range(len(idx))]
+    raw = pd.DataFrame(
+        {
+            "Open": close,
+            "High": [value + 0.5 for value in close],
+            "Low": [value - 0.5 for value in close],
+            "Close": close,
+            "Volume": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+    missing_pos = 150
+    raw.iloc[missing_pos, raw.columns.get_loc("Close")] = float("nan")
+
+    score_frame = analysis_quality.scoring_frame(raw)
+    expected_segment = raw.iloc[missing_pos + 1 :].copy()
+    assert score_frame.index.equals(expected_segment.index)
+    assert score_frame.index[0] == idx[missing_pos + 1]
+
+    actual = analysis.add_indicators(score_frame)
+    expected = analysis.add_indicators(expected_segment)
+    for column in ["EMA5", "EMA20", "EMA50", "EMA200", "RSI14", "MACD", "Return_1d_pct"]:
+        pd.testing.assert_series_equal(actual[column], expected[column])
+
+
+def test_scoring_frame_is_empty_when_latest_ohlc_row_is_invalid():
+    raw = frame()
+    raw.iloc[-1, raw.columns.get_loc("Close")] = float("nan")
+    assert analysis_quality.scoring_frame(raw).empty
+
+def test_scoring_frame_empty_when_all_price_rows_are_invalid():
+    raw = frame()
+    raw.loc[:, ["Open", "High", "Low", "Close"]] = -1.0
+    result = analysis_quality.scoring_frame(raw)
+    assert result.empty
+    assert list(result.columns) == ["Open", "High", "Low", "Close", "Volume"]
+
+

@@ -60,12 +60,13 @@ def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("異常候補" in t and "件あります" in t for t in texts)
     assert any("売買シグナルではありません" in t for t in texts)
-    # 診断があってもスコア表示は従来どおり出る（診断はスコアを変えない）
+    # OHLC矛盾はblockingなので、価格チャートは残してもスコアは公開しない。
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
+    assert any("スコア判定は保留" in t for t in texts)
 
 
-def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch):
+def test_detail_tab_missing_volume_column_is_warning_not_score_block(monkeypatch):
     raw = _frame().drop(columns=["Volume"])
     err = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
     monkeypatch.setattr(
@@ -76,18 +77,31 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
     texts = _all_text(at)
-    assert any("必要な列" in t for t in texts)
-    assert any("分析は行いません" in t for t in texts)
-    # 分析不可でも、取得直後データの診断（必須列欠落）は表示される
+    assert any("出来高" in t for t in texts)
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
-    assert any("必須列の欠落" in t or "異常候補" in t for t in texts)
+    # Current indicators are price-only: absent Volume remains unknown, not zero,
+    # and does not suppress otherwise valid OHLC analysis.
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" not in metric_labels
+    assert "条件スコア" in metric_labels
+    assert not any("スコア判定を保留" in t for t in texts)
+
+def test_watchlist_missing_volume_column_is_warning_only(monkeypatch):
+    raw = _frame().drop(columns=["Volume"])
+    err = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, pd.DataFrame(), err)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (pd.DataFrame(), err))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    assert any("出来高列なし" in str(element.value) for element in at.dataframe)
+    assert not any("品質保留" in str(element.value) for element in at.dataframe)
 
 
 def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
-    # 分析・スコア表示は従来どおり行う（診断不能表示の境界）。
+    # fail-closedでスコアも保留する。
     raw = _frame()
     clean = raw.copy()
 
@@ -106,12 +120,11 @@ def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("診断不能" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
 
 
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
-    # 診断対象は clean ではなく raw：raw の欠損行が「dropna除外候補」として
-    # 件数に現れること、分析は clean で行われスコアが出ることを確認する。
+    # 診断対象は clean ではなく raw：履歴中の欠損行は警告として数える。
     raw = _frame()
     raw.iloc[15, raw.columns.get_loc("Close")] = np.nan
     clean = raw.dropna().copy()
@@ -130,8 +143,7 @@ def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
 
 
 def test_detail_tab_fetches_bundle_once(monkeypatch):
-    # 1銘柄・1期間あたりの外部データ取得は bundle の1回だけ
-    # （個別分析タブが取得を重複させないことの境界）。
+    # 一覧の4銘柄を各1回取得し、個別分析は選択銘柄のキャッシュを再利用する。
     raw = _frame()
     clean = raw.copy()
     calls = []
@@ -145,4 +157,5 @@ def test_detail_tab_fetches_bundle_once(monkeypatch):
     st.cache_data.clear()
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
-    assert len(calls) == 1
+    assert len(calls) == 4
+    assert {symbol for symbol, _period in calls} == {"7203.T", "6758.T", "8306.T", "9984.T"}
