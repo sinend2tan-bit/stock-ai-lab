@@ -29,7 +29,10 @@ def _exchange_holidays(calendar_name, start_year, end_year):
     start = f"{start_year}-01-01"
     end = f"{end_year}-12-31"
     try:
-        calendar = xcals.get_calendar(calendar_name)
+        # The package defaults to a rolling ~20-year range. Request the
+        # exact years explicitly; otherwise historical years can be outside
+        # the default bounds and future years can be omitted silently.
+        calendar = xcals.get_calendar(calendar_name, start=start, end=end)
         sessions = {
             pd.Timestamp(session).date()
             for session in calendar.sessions_in_range(start, end)
