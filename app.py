@@ -101,6 +101,12 @@ def get_history_bundle(symbol, period):
     return analysis.fetch_history_bundle(symbol, period)
 
 
+def fetch_verification_history(symbol):
+    """Return raw OHLCV for verification so missing rows remain observable."""
+    raw, _clean, error = analysis.fetch_history_bundle(symbol, verify.FETCH_PERIOD)
+    return raw, error
+
+
 if refresh:
     st.cache_data.clear()
 
@@ -493,6 +499,8 @@ with tab_verify:
         "方向付き騰落率は参考値で、売買コストを含まないため実際の売買損益とは異なります。"
         "的中率は、方向予測のうち実際の動きが小動き閾値を超えた記録（的中＋不的中）だけを分母とする条件付き指標です。"
         "方向予測率・的中率対象割合・件数を併せて確認し、的中率だけで比較しないでください。"
+        "履歴中の孤立したOHLC欠損行は指標入力から除き、その欠損日が前方測定窓に入る地点だけを時間軸別に保留します。"
+        "出来高だけの欠損は価格バーを除外しません。"
         "中立予測は想定損益の集計に含めません。評価日を5営業日ごとに取るため測定窓が重なり、"
         "検証件数は独立した試行の数ではありません。価格は分割・配当の調整済みで、当時の表示そのままではありません。"
         "的中・不的中の合計が少ない時間軸は、精度を判断できません。"
@@ -513,7 +521,7 @@ with tab_verify:
         progress_bar = st.progress(0, text="データ取得と検証計算を行っています。")
         records, exclusions, fetch_info = verify.verify_all(
             verify.VERIFY_SYMBOLS,
-            lambda s: analysis.fetch_history(s, verify.FETCH_PERIOD),
+            fetch_verification_history,
             progress=lambda done, total: progress_bar.progress(
                 done / total, text=f"検証中：{done}/{total} 銘柄"
             ),
