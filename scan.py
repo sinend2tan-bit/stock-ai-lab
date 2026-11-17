@@ -301,20 +301,22 @@ def _add_indicators_by_valid_ohlc_segments(raw):
     if valid_positions.size == 0:
         return pd.DataFrame()
 
-    split_points = np.flatnonzero(np.diff(valid_positions) > 1) + 1
-    segments = np.split(valid_positions, split_points)
-    feature_frames = []
-    for positions in segments:
-        segment = raw.iloc[positions].copy()
-        for column in required:
-            segment[column] = numeric.iloc[positions][column].to_numpy(dtype=float)
-        if "Volume" not in segment.columns:
-            segment["Volume"] = np.nan
-        else:
-            segment["Volume"] = pd.to_numeric(segment["Volume"], errors="coerce")
-        feature_frames.append(analysis.add_indicators(segment))
-
-    return pd.concat(feature_frames).sort_index()
+    # Downstream horizon-return calculations operate on row offsets. Returning
+    # multiple segments concatenated together would still let those returns
+    # bridge a gap even if rolling indicators were calculated separately.
+    # Match the individual-analysis path: score only the latest contiguous
+    # valid OHLC suffix.
+    split_points = np.flatnonzero(np.diff(valid_positions) > 1)
+    latest_start = int(split_points[-1] + 1) if split_points.size else 0
+    positions = valid_positions[latest_start:]
+    segment = raw.iloc[positions].copy()
+    for column in required:
+        segment[column] = numeric.iloc[positions][column].to_numpy(dtype=float)
+    if "Volume" not in segment.columns:
+        segment["Volume"] = np.nan
+    else:
+        segment["Volume"] = pd.to_numeric(segment["Volume"], errors="coerce")
+    return analysis.add_indicators(segment)
 
 
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
