@@ -1221,3 +1221,42 @@ def test_required_columns_default_matches_explicit_ohlcv():
         required_columns=["Open", "High", "Low", "Close", "Volume"],
     ).to_dict()
     assert as_list == explicit
+
+
+def test_cross_year_gap_requires_complete_holiday_calendar():
+    # 年をまたぐ区間では、対象となる全年度のカレンダーがある場合だけ
+    # 公式休場日を差し引く。片方の年度が未登録なら平日ベースへ戻す。
+    dates = ["2026-12-31", "2027-01-04"]  # 1/1 は2027年の休場日
+    complete = {
+        2026: set(),
+        2027: {pd.Timestamp("2027-01-01").date()},
+    }
+    complete_report = diagnose_history(
+        make_frame(dates), as_of="2027-01-04", holidays_by_year=complete
+    )
+    assert complete_report.review_gaps == []
+
+    incomplete = {
+        2027: {pd.Timestamp("2027-01-01").date()},
+    }
+    fallback_report = diagnose_history(
+        make_frame(dates), as_of="2027-01-04", holidays_by_year=incomplete
+    )
+    assert len(fallback_report.review_gaps) == 1
+    assert fallback_report.review_gaps[0]["skipped_weekdays"] == 1
+    assert fallback_report.review_gaps[0]["skipped_holidays"] == 0
+    assert fallback_report.review_gaps[0]["skipped_trading_days"] == 1
+
+
+def test_cross_year_gap_falls_back_when_end_year_calendar_is_missing():
+    # 開始年だけ登録され、終了年が欠けている場合も全年度未完備として
+    # 休場日を差し引かず、平日ベースで要確認にする。
+    dates = ["2026-12-31", "2027-01-04"]
+    partial = {2026: set()}
+    report = diagnose_history(
+        make_frame(dates), as_of="2027-01-04", holidays_by_year=partial
+    )
+    assert len(report.review_gaps) == 1
+    assert report.review_gaps[0]["skipped_weekdays"] == 1
+    assert report.review_gaps[0]["skipped_holidays"] == 0
+    assert report.review_gaps[0]["skipped_trading_days"] == 1
