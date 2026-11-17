@@ -525,7 +525,7 @@ def test_scan_displays_historical_missing_row_warning_without_blocking_unverifie
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
-    _, clean, error = scan.scan.analysis._split_raw_clean(frame)
+    _, clean, error = scan.analysis._split_raw_clean(frame)
     assert error is None
     universe = [("7203.T", "個別取得確認社", "テスト")]
 
