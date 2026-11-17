@@ -316,8 +316,7 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
             records.extend(recs)
             exclusions.extend(excls)
             quality_exclusion = next(
-                (e for e in excls if e.get("時間軸") == "全体"
-                 and e.get("理由", "").startswith("データ品質上の問題")),
+                (e for e in excls if e.get("時間軸") == "全体"),
                 None,
             )
             quality_warning = next(
