@@ -1,5 +1,8 @@
 """スキャン機能（scan.py）の単体テスト。ネットワークは使わない。"""
 
+import ast
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -191,6 +194,73 @@ def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
     shaped = scan._shape(frame, symbol="7203.T")
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert any("最新行の価格データ欠損：Close" in item for item in blocks)
+
+
+def test_app_batch_and_single_fetch_callbacks_capture_sanitized_frames():
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "clean_frame_for_forward"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "scan"
+    ]
+    assert len(calls) == 2
+
+
+def test_scan_quality_gate_synthetic_60_ticker_universe_exclusion_reasons():
+    universe = []
+    frames = {}
+
+    def add_group(prefix, count, defect=None):
+        for i in range(count):
+            symbol = f"{prefix}{i:02d}.T"
+            frame = rising()
+            if defect == "volume_missing":
+                frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
+            elif defect == "latest_price_missing":
+                frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
+            elif defect == "ohlc_contradiction":
+                frame.iloc[10, frame.columns.get_loc("High")] = (
+                    frame.iloc[10]["Close"] * 0.5
+                )
+            elif defect == "malformed_price":
+                frame.iloc[10, frame.columns.get_loc("Close")] = "not-a-price"
+            frames[symbol] = frame
+            universe.append((symbol, symbol, "合成テスト"))
+
+    add_group("N", 50)
+    add_group("V", 4, "volume_missing")
+    add_group("L", 2, "latest_price_missing")
+    add_group("O", 2, "ohlc_contradiction")
+    add_group("M", 2, "malformed_price")
+    assert len(universe) == 60
+
+    def batch_fetcher(symbols):
+        return {
+            symbol: (scan._shape(frames[symbol], symbol=symbol), None)
+            for symbol in symbols
+        }
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        batch_fetcher,
+        lambda symbol: (scan._shape(frames[symbol], symbol=symbol), None),
+        run_at="synthetic-60-quality-gate",
+    )
+
+    assert len(ranked) == 54
+    assert len(excluded) == 6
+    assert sum("最新行の価格データ欠損" in row["警告・理由"] for row in excluded) == 2
+    assert sum("OHLC価格異常" in row["警告・理由"] for row in excluded) == 4
+    ranked_symbols = {row["コード"] for row in ranked}
+    assert all(f"V{i:02d}.T" in ranked_symbols for i in range(4))
+    assert all(
+        "欠損行の除外 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
+        for i in range(4)
+    )
 
 
 def test_clean_frame_for_forward_strips_raw_diagnostic_attrs():
