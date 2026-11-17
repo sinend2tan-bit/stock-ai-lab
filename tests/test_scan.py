@@ -3,6 +3,7 @@
 import ast
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -488,11 +489,11 @@ def test_scanner_indicator_calculation_restarts_after_historical_ohlc_gap():
         shaped.attrs["_quality_raw"]
     )
     after_gap = frame.index[gap_position + 1]
-    assert pd.isna(features.loc[after_gap, "Return_1"])
+    assert pd.isna(features.loc[after_gap, "Return_1d_pct"])
 
     # The same timestamp is a normal adjacent-bar return without the gap.
     continuous = scan._add_indicators_by_valid_ohlc_segments(rising())
-    assert np.isfinite(continuous.loc[after_gap, "Return_1"])
+    assert np.isfinite(continuous.loc[after_gap, "Return_1d_pct"])
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
