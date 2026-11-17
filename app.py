@@ -159,6 +159,11 @@ def show_data_quality(raw, symbol):
         )
         return None, ["品質診断不能"]
     report = quality_report.to_dict()
+    if "Volume" not in raw.columns:
+        st.warning(
+            "出来高列が欠落しています。現在の条件スコアはOHLC価格ベースのため、"
+            "価格分析は継続します。出来高に関する診断は利用できません。"
+        )
     if blocking_reasons:
         st.error("品質上の問題があるため、このデータのスコア判定は保留します。")
         for reason in blocking_reasons:
