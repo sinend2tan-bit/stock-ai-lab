@@ -112,12 +112,22 @@ def test_verification_rejects_unsorted_dates_instead_of_sorting():
     assert "日付順序逆転" in exclusions[0]["理由"]
 
 
-def test_verification_rejects_interior_ohlc_missing_row():
+def test_verification_missing_ohlc_is_warning_and_only_overlapping_forward_windows_hold():
     frame = rising_frame(400)
+    missing_date = frame.index[150]
     frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
     records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
-    assert records == []
-    assert "履歴中のOHLC欠損" in exclusions[0]["理由"]
+    assert records
+    assert any(
+        e["時間軸"] == "品質警告" and "履歴中のOHLC欠損" in e["理由"]
+        for e in exclusions
+    )
+    assert any(
+        "測定窓内にOHLC欠損行" in e["理由"] and e["件数"] > 0
+        for e in exclusions
+    )
+    # Evaluation dates after the missing bar can still be scored from valid OHLC history.
+    assert any(r["評価日"] > str(missing_date.date()) for r in records)
 
 
 def test_verification_allows_volume_only_missing_value():
