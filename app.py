@@ -133,6 +133,21 @@ _VOLUME_ISSUE_LABELS = {
 }
 
 
+def assess_data_quality(raw, symbol):
+    """品質診断とblocking理由を返す共通入口。診断不能はfail-closed。"""
+    try:
+        market = analysis.market_of(symbol)
+        report_obj = data_quality.diagnose_history(
+            raw,
+            market=market,
+            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+        )
+        return report_obj, report_obj.blocking_reasons(), None
+    except Exception as exc:
+        reason = f"データ品質診断不能（{type(exc).__name__}）"
+        return None, [reason], exc
+
+
 def show_data_quality(raw, symbol):
     """取得直後データを診断し、個別分析のスコア表示を保留すべき理由を返す。"""
     st.markdown("**データ品質診断（取得直後データ）**")
@@ -141,22 +156,14 @@ def show_data_quality(raw, symbol):
         "価格データの整合性を確認できない場合、個別スコアは表示しません。"
         "診断を通過してもデータの正確性を保証するものではありません。"
     )
-    try:
-        market = analysis.market_of(symbol)
-        report_obj = data_quality.diagnose_history(
-            raw,
-            market=market,
-            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        )
-        blocking_reasons = report_obj.blocking_reasons()
-        report = report_obj.to_dict()
-    except Exception as exc:
-        reason = f"データ品質診断不能（{type(exc).__name__}）"
+    report_obj, blocking_reasons, error = assess_data_quality(raw, symbol)
+    if error is not None:
         st.error(
             "品質診断を実施できませんでした。診断不能のため、個別スコア判定を保留します。"
-            f"（{type(exc).__name__}: {str(exc)[:120]}）"
+            f"（{type(error).__name__}: {str(error)[:120]}）"
         )
-        return [reason]
+        return blocking_reasons
+    report = report_obj.to_dict()
     st.write(
         f"取得本数：{report['row_count']}本 / "
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
@@ -295,33 +302,51 @@ with tab_overview:
         status = st.empty()
         for i, sym in enumerate(symbols):
             status.write(f"取得中：{sym}")
-            raw, err = get_history(sym, period)
-            if err is not None or raw.empty:
+            raw, clean, err = get_history_bundle(sym, period)
+            if err is not None or clean is None or clean.empty:
                 rows.append({
                     "銘柄": sym, "会社名": company_name(sym), "状態": "取得失敗", "終値": None,
-                    "データ最終日": None, "本数": 0,
+                    "データ最終日": str(raw.index[-1].date()) if raw is not None and not raw.empty else None,
+                    "本数": len(clean) if clean is not None else 0,
                     "短期": "—", "中期": "—", "長期": "—",
                     "備考": err or "データなし",
                 })
             else:
-                df = analysis.add_indicators(raw)
-                results = analysis.assess_all(df)
-                fresh = analysis.freshness_check(df, sym)
-                note = ""
-                if fresh["status"] == "stale":
-                    note = "データが古い可能性あり"
-                elif fresh["status"] == "check":
-                    note = "最終日から間隔あり"
-                rows.append({
-                    "銘柄": sym, "会社名": company_name(sym), "状態": "取得成功",
-                    "終値": round(float(df["Close"].iloc[-1]), 3),
-                    "データ最終日": str(fresh["last_date"]),
-                    "本数": fresh["rows"],
-                    "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
-                    "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
-                    "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
-                    "備考": note,
-                })
+                quality_report, quality_blocks, quality_error = assess_data_quality(raw, sym)
+                if quality_blocks:
+                    rows.append({
+                        "銘柄": sym, "会社名": company_name(sym), "状態": "品質保留", "終値": None,
+                        "データ最終日": str(raw.index[-1].date()),
+                        "本数": len(clean),
+                        "短期": "判定保留", "中期": "判定保留", "長期": "判定保留",
+                        "備考": " / ".join(quality_blocks),
+                    })
+                else:
+                    df = analysis.add_indicators(clean)
+                    results = analysis.assess_all(df)
+                    fresh = analysis.freshness_check(df, sym)
+                    note_parts = []
+                    if fresh["status"] == "stale":
+                        note_parts.append("データが古い可能性あり")
+                    elif fresh["status"] == "check":
+                        note_parts.append("最終日から間隔あり")
+                    if quality_report is not None:
+                        if quality_report.rows_with_missing:
+                            note_parts.append(f"欠損行除外 {quality_report.rows_with_missing}行")
+                        if quality_report.warning_count:
+                            note_parts.append(f"品質警告 {quality_report.warning_count}件")
+                        if quality_report.unverified_gap_count:
+                            note_parts.append(f"休場日カレンダー判定不能 {quality_report.unverified_gap_count}件")
+                    rows.append({
+                        "銘柄": sym, "会社名": company_name(sym), "状態": "取得成功",
+                        "終値": round(float(df["Close"].iloc[-1]), 3),
+                        "データ最終日": str(fresh["last_date"]),
+                        "本数": fresh["rows"],
+                        "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
+                        "中期": results["中期"]["label"] if results["中期"]["available"] else "判定保留",
+                        "長期": results["長期"]["label"] if results["長期"]["available"] else "判定不可",
+                        "備考": " / ".join(note_parts),
+                    })
             progress.progress((i + 1) / len(symbols))
         status.empty()
         progress.empty()
@@ -634,7 +659,9 @@ with tab_scan:
             return batch
 
         def single_fetcher(symbol):
-            df, err = analysis.fetch_history(symbol, scan.SCAN_PERIOD)
+            df, err = analysis.fetch_history(
+                symbol, scan.SCAN_PERIOD, include_quality_raw=True
+            )
             if err is None and df is not None and not df.empty:
                 captured_frames[symbol] = scan.clean_frame_for_forward(df)
             return df, err
