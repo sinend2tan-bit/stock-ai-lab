@@ -298,6 +298,9 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             if prior_missing_dates else 0
         )
         segment = price_frame.iloc[segment_start : eval_price_pos + 1]
+        # All horizons share the same indicator history for this evaluation date.
+        # Compute indicators once, only after at least one horizon is eligible.
+        indicator_results = None
 
         for horizon in HORIZONS:
             if raw_end < MIN_BARS[horizon] or len(segment) < MIN_BARS[horizon]:
@@ -321,9 +324,11 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
                 continue
             meas_price_pos = int(meas_lookup[0])
 
-            result = analysis.assess_all(
-                analysis.add_indicators(segment)
-            )[horizon]
+            if indicator_results is None:
+                indicator_results = analysis.assess_all(
+                    analysis.add_indicators(segment)
+                )
+            result = indicator_results[horizon]
             eval_close = float(closes.iloc[eval_price_pos])
             meas_close = float(closes.iloc[meas_price_pos])
             forward_pct = (meas_close / eval_close - 1.0) * 100.0 if eval_close else 0.0
