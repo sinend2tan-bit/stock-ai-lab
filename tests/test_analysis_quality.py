@@ -58,9 +58,20 @@ def test_diagnostic_failure_is_not_treated_as_clean(monkeypatch):
     assert error.startswith("RuntimeError:")
 
 def test_scoring_frame_keeps_price_bars_when_volume_is_missing():
-    clean = frame()
-    raw = frame()
-    raw.iloc[2, raw.columns.get_loc("Volume")] = float("nan")
+    idx = pd.bdate_range("2024-01-02", periods=320)
+    close = [100.0 + i * 0.08 + (i % 7) * 0.03 for i in range(len(idx))]
+    clean = pd.DataFrame(
+        {
+            "Open": close,
+            "High": [value + 0.5 for value in close],
+            "Low": [value - 0.5 for value in close],
+            "Close": close,
+            "Volume": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+    raw = clean.copy()
+    raw.iloc[150, raw.columns.get_loc("Volume")] = float("nan")
     score_frame = analysis_quality.scoring_frame(raw)
     assert score_frame.index.equals(clean.index)
     assert score_frame["Close"].equals(clean["Close"])
