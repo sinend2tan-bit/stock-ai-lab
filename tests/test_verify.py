@@ -138,6 +138,21 @@ def test_verification_allows_volume_only_missing_value():
     assert not any(e["時間軸"] == "全体" for e in exclusions)
 
 
+
+def test_verify_all_surfaces_interior_ohlc_missing_as_warning():
+    frame = rising_frame(400)
+    frame.iloc[150, frame.columns.get_loc("Close")] = float("nan")
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, None), run_at="x"
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert "履歴中のOHLC欠損" in info[0]["理由"]
+    assert any(e["時間軸"] == "品質警告" for e in exclusions)
+    assert any("測定窓内にOHLC欠損行" in e["理由"] for e in exclusions)
+
+
+
 def test_verification_rejects_nat_date_index():
     frame = rising_frame(400)
     idx = list(frame.index)
