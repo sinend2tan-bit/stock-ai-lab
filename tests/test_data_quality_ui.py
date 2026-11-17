@@ -44,10 +44,9 @@ def _all_text(at):
     return texts
 
 
-def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
+def test_detail_tab_volume_warning_does_not_block_scores(monkeypatch):
     raw = _frame()
-    raw.iloc[10, raw.columns.get_loc("Volume")] = 0.0  # 警告候補
-    raw.iloc[20, raw.columns.get_loc("High")] = 1.0  # 異常候補
+    raw.iloc[10, raw.columns.get_loc("Volume")] = 0.0  # スコア計算対象外の警告候補
     clean = raw.copy()
     monkeypatch.setattr(
         analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
@@ -58,9 +57,9 @@ def test_detail_tab_shows_diagnosis_and_scores(monkeypatch):
     assert not at.exception
     texts = _all_text(at)
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
-    assert any("異常候補" in t and "件あります" in t for t in texts)
+    assert any("警告候補" in t for t in texts)
     assert any("売買シグナルではありません" in t for t in texts)
-    # 診断があってもスコア表示は従来どおり出る（診断はスコアを変えない）
+    # Volume-only warning does not block because current scoring does not consume Volume.
     metric_labels = [m.label for m in at.metric]
     assert "条件スコア" in metric_labels
 
@@ -85,9 +84,8 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
     assert "条件スコア" not in metric_labels
 
 
-def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
-    # 診断自体が失敗した場合は正常扱いにせず「診断不能」と表示し、
-    # 分析・スコア表示は従来どおり行う（診断不能表示の境界）。
+def test_detail_tab_diagnosis_failure_holds_scores(monkeypatch):
+    # 診断不能は正常扱いせず、個別スコア判定を保留する。
     raw = _frame()
     clean = raw.copy()
 
@@ -106,7 +104,42 @@ def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("診断不能" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" in metric_labels
+    assert "条件スコア" not in metric_labels
+    assert any("品質ゲート：個別分析スコアを保留" in t for t in texts)
+
+
+def test_detail_tab_invalid_latest_price_holds_scores(monkeypatch):
+    raw = _frame()
+    raw.iloc[-1, raw.columns.get_loc("Close")] = np.nan
+    clean = raw.dropna().copy()
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    texts = _all_text(at)
+    assert any("最新行の価格データ欠損：Close" in t for t in texts)
+    metric_labels = [m.label for m in at.metric]
+    assert "条件スコア" not in metric_labels
+
+
+def test_detail_tab_invalid_ohlc_holds_scores(monkeypatch):
+    raw = _frame()
+    raw.iloc[20, raw.columns.get_loc("High")] = 1.0
+    clean = raw.copy()
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    texts = _all_text(at)
+    assert any("OHLC価格異常" in t for t in texts)
+    metric_labels = [m.label for m in at.metric]
+    assert "条件スコア" not in metric_labels
 
 
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
