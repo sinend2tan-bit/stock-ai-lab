@@ -132,10 +132,15 @@ def test_verification_missing_ohlc_is_warning_and_only_overlapping_forward_windo
 
 
 def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_horizons():
-    frame = rising_frame(500)
+    # Non-linear data makes a one-bar off-by-one in the post-gap segment observable.
+    closes = [
+        100.0 + 0.15 * i + ((i % 9) - 4) * 0.35 + ((i % 5) - 2) * 0.2
+        for i in range(500)
+    ]
+    frame = make_frame(closes)
     missing_pos = 50
     frame.iloc[missing_pos, frame.columns.get_loc("Close")] = float("nan")
-    target_pos = 304  # 305 rows from source; long horizon has 254 contiguous bars after the gap
+    target_pos = 305  # compressed price-frame index 304 after one missing OHLC row
     records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
     target = next(
         r for r in records
@@ -148,6 +153,7 @@ def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_
     )["長期"]
     assert target["スコア"] == direct["score"]
     assert target["測定日"] == str(frame.index[target_pos + verify.WINDOWS["長期"]].date())
+
 
 
 def test_verification_allows_volume_only_missing_value():
