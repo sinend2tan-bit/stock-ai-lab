@@ -188,9 +188,9 @@ def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
     assert "条件スコア" in metric_labels
 
 
-def test_detail_tab_fetches_bundle_once(monkeypatch):
-    # 1銘柄・1期間あたりの外部データ取得は bundle の1回だけ
-    # （個別分析タブが取得を重複させないことの境界）。
+def test_overview_and_detail_share_bundle_cache(monkeypatch):
+    # Watchlist overview and individual detail share the same cached raw/clean bundle;
+    # the selected ticker must not be downloaded a second time in the same run.
     raw = _frame()
     clean = raw.copy()
     calls = []
@@ -204,4 +204,6 @@ def test_detail_tab_fetches_bundle_once(monkeypatch):
     st.cache_data.clear()
     at = AppTest.from_file(APP_PATH).run(timeout=180)
     assert not at.exception
-    assert len(calls) == 1
+    assert len(calls) == 4
+    assert calls.count(("7203.T", "2y")) == 1
+    assert {symbol for symbol, _ in calls} == {"7203.T", "6758.T", "8306.T", "9984.T"}
