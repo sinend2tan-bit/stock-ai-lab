@@ -373,11 +373,11 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
     shaped = scan._shape(frame)
-    universe = [("MISSING.T", "欠損確認社", "テスト")]
+    universe = [("7203.T", "欠損確認社", "テスト")]
 
     ranked, excluded, _ = scan.run_scan(
         universe,
-        lambda symbols: {"MISSING.T": (shaped, None)},
+        lambda symbols: {"7203.T": (shaped, None)},
         lambda symbol: (shaped, None),
         run_at="missing-row-warning-test",
     )
@@ -388,11 +388,11 @@ def test_scan_displays_missing_row_drop_count_without_changing_score():
         run_at="missing-row-baseline-test",
     )
 
-    # A confirmed official-session gap is a blocking integrity issue even
-    # when the affected historical OHLC row was dropped from the indicator frame.
-    assert ranked == [] and len(excluded) == 1
-    assert "欠損行の除外 1行" in excluded[0]["警告・理由"]
-    assert "営業日欠損候補" in excluded[0]["警告・理由"]
+    # An isolated historical gap in an unverified calendar year is a warning,
+    # not proof of a missing official session; the cleaned indicator frame remains usable.
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert ranked[0]["中期スコア"] is not None
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
@@ -400,18 +400,17 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
     _, clean, error = scan.analysis._split_raw_clean(frame)
     assert error is None
-    universe = [("FALLBACK.T", "個別取得確認社", "テスト")]
+    universe = [("7203.T", "個別取得確認社", "テスト")]
 
     ranked, excluded, _ = scan.run_scan(
         universe,
-        lambda symbols: {"FALLBACK.T": (pd.DataFrame(), "batch unavailable")},
+        lambda symbols: {"7203.T": (pd.DataFrame(), "batch unavailable")},
         lambda symbol: (clean, None),
         run_at="missing-row-fallback-test",
     )
 
-    assert ranked == [] and len(excluded) == 1
-    assert "欠損行の除外 1行" in excluded[0]["警告・理由"]
-    assert "営業日欠損候補" in excluded[0]["警告・理由"]
+    assert len(ranked) == 1 and excluded == []
+    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
 
 
 
