@@ -163,6 +163,24 @@ def test_aggregate_denominator_and_pnl_exclusions():
     assert bd["判定保留"] == 0
 
 
+
+def test_aggregate_empty_symbol_horizon_has_null_coverage_not_unbound_local():
+    records = [_rec(銘柄="7203.T", 時間軸="短期")]
+    exclusions = [
+        {"銘柄": "7203.T", "時間軸": "長期", "理由": "履歴不足", "件数": 5}
+    ]
+    summary = verify.aggregate(records, exclusions)
+    long_row = next(
+        row for row in summary["銘柄別"]
+        if row["銘柄"] == "7203.T" and row["時間軸"] == "長期"
+    )
+    assert long_row["評価記録数"] == 0
+    assert long_row["方向予測数"] == 0
+    assert long_row["方向予測率pct"] is None
+    assert long_row["的中率対象割合pct"] is None
+    assert long_row["対象外"] == 5
+
+
 # --- 取得失敗の扱い ---
 
 def test_fetch_failure_becomes_exclusion_and_others_continue():
