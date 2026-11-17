@@ -179,6 +179,32 @@ def test_verification_allows_missing_volume_column_and_keeps_price_bars():
 
 
 
+
+def test_verify_all_allows_missing_volume_column_despite_legacy_required_column_error():
+    frame = rising_frame(400).drop(columns=["Volume"])
+    error = "取得したデータに必要な列（始値・高値・安値・終値・出来高）がそろっていません。"
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, error), run_at="x"
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert "出来高列が欠落" in info[0]["理由"]
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
+def test_verify_all_allows_volume_all_missing_when_legacy_dropna_returns_empty_error():
+    frame = rising_frame(400)
+    frame["Volume"] = float("nan")
+    records, exclusions, info = verify.verify_all(
+        ["7203.T"], lambda _symbol: (frame, "取得したデータが空でした（欠損のみ）。"),
+        run_at="x",
+    )
+    assert records
+    assert info[0]["取得"] == "品質警告あり"
+    assert any("出来高欠損行あり" in e["理由"] for e in exclusions)
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+
+
 def test_verify_all_holds_nonempty_raw_when_fetcher_reports_normalization_error():
     frame = rising_frame(400)
     records, exclusions, info = verify.verify_all(
