@@ -140,6 +140,19 @@ def test_verification_allows_volume_only_missing_value():
 
 
 
+
+def test_verification_allows_missing_volume_column_and_keeps_price_bars():
+    frame = rising_frame(400).drop(columns=["Volume"])
+    records, exclusions = verify.verify_symbol("7203.T", frame, run_at="x")
+    assert records
+    assert not any(e["時間軸"] == "全体" for e in exclusions)
+    assert any(
+        e["時間軸"] == "品質警告" and "出来高列が欠落" in e["理由"]
+        for e in exclusions
+    )
+
+
+
 def test_verify_all_holds_nonempty_raw_when_fetcher_reports_normalization_error():
     frame = rising_frame(400)
     records, exclusions, info = verify.verify_all(
