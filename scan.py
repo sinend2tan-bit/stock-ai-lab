@@ -308,6 +308,10 @@ def _add_indicators_by_valid_ohlc_segments(raw):
         segment = raw.iloc[positions].copy()
         for column in required:
             segment[column] = numeric.iloc[positions][column].to_numpy(dtype=float)
+        if "Volume" not in segment.columns:
+            segment["Volume"] = np.nan
+        else:
+            segment["Volume"] = pd.to_numeric(segment["Volume"], errors="coerce")
         feature_frames.append(analysis.add_indicators(segment))
 
     return pd.concat(feature_frames).sort_index()
