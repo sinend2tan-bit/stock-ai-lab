@@ -125,8 +125,12 @@ def _verification_quality_report(symbol, raw):
         return None, [f"品質診断不能：{type(exc).__name__}: {str(exc)[:120]}"]
 
     issues = list(report.blocking_reasons())
-    if report.missing_columns:
-        issues.append("必須列欠落：" + "、".join(report.missing_columns))
+    missing_price_columns = [
+        column for column in report.missing_columns
+        if column in {"Open", "High", "Low", "Close"}
+    ]
+    if missing_price_columns:
+        issues.append("必須OHLC列欠落：" + "、".join(missing_price_columns))
     return report, list(dict.fromkeys(issues))
 
 
@@ -139,7 +143,10 @@ def _verification_price_frame(raw):
     frame = raw.loc[valid].copy()
     for column in price_columns:
         frame[column] = numeric.loc[valid, column]
-    frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
+    if "Volume" in frame.columns:
+        frame["Volume"] = pd.to_numeric(frame["Volume"], errors="coerce")
+    else:
+        frame["Volume"] = np.nan
     return frame
 
 
@@ -209,6 +216,12 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             "品質警告",
             "休場日カレンダーの対象年不足により日付間隔を確定できない",
             int(report.unverified_gap_count),
+        )
+    if "Volume" in report.missing_columns:
+        add_exclusion(
+            "品質警告",
+            "出来高列が欠落（現在の価格ベース判定には使用しないためスコアは継続）",
+            1,
         )
     if report.warning_count:
         add_exclusion(
