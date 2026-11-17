@@ -105,7 +105,7 @@ def test_detail_tab_diagnosis_failure_holds_scores(monkeypatch):
     assert any("診断不能" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
     assert "条件スコア" not in metric_labels
-    assert any("品質ゲート：個別分析スコアを保留" in t for t in texts)
+    assert any("診断不能のため、個別スコア判定を保留します" in t for t in texts)
 
 
 def test_detail_tab_invalid_latest_price_holds_scores(monkeypatch):
@@ -128,6 +128,24 @@ def test_detail_tab_invalid_latest_price_holds_scores(monkeypatch):
 def test_detail_tab_invalid_ohlc_holds_scores(monkeypatch):
     raw = _frame()
     raw.iloc[20, raw.columns.get_loc("High")] = 1.0
+    clean = raw.copy()
+    monkeypatch.setattr(
+        analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
+    )
+    monkeypatch.setattr(analysis, "fetch_history", lambda s, p="2y": (clean, None))
+    st.cache_data.clear()
+    at = AppTest.from_file(APP_PATH).run(timeout=180)
+    assert not at.exception
+    texts = _all_text(at)
+    assert any("OHLC価格異常" in t for t in texts)
+    metric_labels = [m.label for m in at.metric]
+    assert "条件スコア" not in metric_labels
+
+
+def test_detail_tab_malformed_price_holds_scores(monkeypatch):
+    raw = _frame()
+    raw["Close"] = raw["Close"].astype(object)
+    raw.iloc[20, raw.columns.get_loc("Close")] = "not-a-price"
     clean = raw.copy()
     monkeypatch.setattr(
         analysis, "fetch_history_bundle", lambda s, p="2y": (raw, clean, None)
