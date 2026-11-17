@@ -349,6 +349,21 @@ def test_fetch_history_preserves_missing_row_count_for_scan(monkeypatch):
     assert len(clean) == len(source) - 1
     assert clean.attrs["rows_dropped_by_dropna"] == 1
     assert clean.attrs["raw_row_count"] == len(source)
+    assert "_quality_raw" not in clean.attrs
+
+
+def test_fetch_history_raw_diagnostics_are_opt_in(monkeypatch):
+    monkeypatch.setattr(analysis, "FETCH_RETRY_WAIT_SECONDS", 0)
+    source = _frame_with_nan_row()
+    monkeypatch.setattr(analysis, "_download_history", lambda *a, **k: (source, None))
+
+    clean, err = analysis.fetch_history(
+        "7203.T", period="1y", include_quality_raw=True
+    )
+
+    assert err is None
+    assert "_quality_raw" in clean.attrs
+    pd.testing.assert_frame_equal(clean.attrs["_quality_raw"], source)
 
 
 def test_bundle_clean_matches_fetch_history(monkeypatch):
