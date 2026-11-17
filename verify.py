@@ -262,6 +262,8 @@ def aggregate(records, exclusions=None):
             if cnt:
                 by_horizon.append({
                     "時間軸": horizon, "的中": 0, "不的中": 0, "的中率pct": None,
+                    "評価記録数": 0, "方向予測数": 0, "方向予測率pct": None,
+                    "的中率対象割合pct": None,
                     "判定件数": 0, "中立予測": 0, "中立割合pct": None,
                     "実際小動き": 0, "判定保留": 0,
                     "対象外": cnt, "方向付き騰落率_平均pct": None,
@@ -292,7 +294,15 @@ def aggregate(records, exclusions=None):
             if len(directional)
             else None
         )
-        return counts, denom, hit_rate, pnl_mean, pnl_sum, neutral_rate
+        directional_predictions = int(sub["予測方向"].isin(["上昇", "下落"]).sum())
+        directional_coverage = (
+            round(directional_predictions / len(sub) * 100, 1) if len(sub) else None
+        )
+        hit_rate_coverage = round(denom / len(sub) * 100, 1) if len(sub) else None
+        return (
+            counts, denom, hit_rate, pnl_mean, pnl_sum, neutral_rate,
+            directional_predictions, directional_coverage, hit_rate_coverage,
+        )
 
     for horizon in HORIZONS:
         sub = df[df["時間軸"] == horizon]
@@ -302,12 +312,19 @@ def aggregate(records, exclusions=None):
         if sub.empty:
             counts = {j: 0 for j in JUDGED}
             denom, hit_rate, pnl_mean, pnl_sum, neutral_rate = 0, None, None, None, None
+            directional_predictions, directional_coverage, hit_rate_coverage = 0, None, None
         else:
-            counts, denom, hit_rate, pnl_mean, pnl_sum, neutral_rate = summarize(sub)
+            (
+                counts, denom, hit_rate, pnl_mean, pnl_sum, neutral_rate,
+                directional_predictions, directional_coverage, hit_rate_coverage,
+            ) = summarize(sub)
         by_horizon.append({
             "時間軸": horizon,
             "的中": counts["的中"], "不的中": counts["不的中"],
             "的中率pct": hit_rate, "判定件数": denom,
+            "評価記録数": len(sub), "方向予測数": directional_predictions,
+            "方向予測率pct": directional_coverage,
+            "的中率対象割合pct": hit_rate_coverage,
             "中立予測": counts["中立予測"], "中立割合pct": neutral_rate,
             "実際小動き": counts["実際小動き"],
             "判定保留": counts["判定保留"], "対象外": excl,
@@ -329,18 +346,27 @@ def aggregate(records, exclusions=None):
             if sub.empty:
                 counts = {j: 0 for j in JUDGED}
                 denom, hit_rate = 0, None
+                directional_predictions = 0
+                directional_coverage = None
+                hit_rate_coverage = None
             else:
-                counts, denom, hit_rate, _, _, _ = summarize(sub)
+                (
+                    counts, denom, hit_rate, _, _, _, directional_predictions,
+                    directional_coverage, hit_rate_coverage,
+                ) = summarize(sub)
             by_symbol.append({
                 "銘柄": symbol, "時間軸": horizon,
                 "的中": counts["的中"], "不的中": counts["不的中"],
                 "的中率pct": hit_rate, "判定件数": denom,
+                "評価記録数": len(sub), "方向予測数": directional_predictions,
+                "方向予測率pct": directional_coverage,
+                "的中率対象割合pct": hit_rate_coverage,
                 "中立予測": counts["中立予測"], "実際小動き": counts["実際小動き"],
                 "判定保留": counts["判定保留"], "対象外": excl,
             })
 
     # 実際に上昇／下落した場面での予測内訳（見逃しの把握用）
-    judged_rows = df[df["判定"].isin(["的中", "不的中", "中立予測", "実際小動き"])]
+    judged_rows = df[df["実際の方向"].isin(["上昇", "下落"])]
     for horizon in HORIZONS:
         for actual in ["上昇", "下落"]:
             sub = judged_rows[
@@ -354,6 +380,7 @@ def aggregate(records, exclusions=None):
                 "上昇予測": int((sub["予測方向"] == "上昇").sum()),
                 "中立予測": int((sub["予測方向"] == "中立").sum()),
                 "下落予測": int((sub["予測方向"] == "下落").sum()),
+                "判定保留": int((sub["予測方向"] == "判定保留").sum()),
             })
 
     return {

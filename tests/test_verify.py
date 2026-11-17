@@ -141,6 +141,10 @@ def test_aggregate_denominator_and_pnl_exclusions():
     short = next(r for r in summary["時間軸別"] if r["時間軸"] == "短期")
     assert short["的中"] == 1 and short["不的中"] == 1
     assert short["的中率pct"] == 50.0  # 分母は的中+不的中の2件のみ
+    assert short["評価記録数"] == 4
+    assert short["方向予測数"] == 3  # 小動きでも方向を出した記録を含む
+    assert short["方向予測率pct"] == 75.0
+    assert short["的中率対象割合pct"] == 50.0
     assert short["中立予測"] == 1 and short["実際小動き"] == 1
     # 中立割合は予測記録の総数（4件）に対する割合
     assert short["中立割合pct"] == 25.0
@@ -156,6 +160,25 @@ def test_aggregate_denominator_and_pnl_exclusions():
         if r["時間軸"] == "短期" and r["実際の方向"] == "上昇"
     )
     assert bd["上昇予測"] == 1 and bd["下落予測"] == 1 and bd["中立予測"] == 1
+    assert bd["判定保留"] == 0
+
+
+
+def test_aggregate_empty_symbol_horizon_has_null_coverage_not_unbound_local():
+    records = [_rec(銘柄="7203.T", 時間軸="短期")]
+    exclusions = [
+        {"銘柄": "7203.T", "時間軸": "長期", "理由": "履歴不足", "件数": 5}
+    ]
+    summary = verify.aggregate(records, exclusions)
+    long_row = next(
+        row for row in summary["銘柄別"]
+        if row["銘柄"] == "7203.T" and row["時間軸"] == "長期"
+    )
+    assert long_row["評価記録数"] == 0
+    assert long_row["方向予測数"] == 0
+    assert long_row["方向予測率pct"] is None
+    assert long_row["的中率対象割合pct"] is None
+    assert long_row["対象外"] == 5
 
 
 # --- 取得失敗の扱い ---
