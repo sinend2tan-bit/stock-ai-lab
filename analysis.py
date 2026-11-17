@@ -28,11 +28,17 @@ def _exchange_holidays(calendar_name, start_year, end_year):
     """
     start = f"{start_year}-01-01"
     end = f"{end_year}-12-31"
-    calendar = xcals.get_calendar(calendar_name, start=start, end=end)
-    sessions = {
-        pd.Timestamp(session).date()
-        for session in calendar.sessions_in_range(start, end)
-    }
+    try:
+        calendar = xcals.get_calendar(calendar_name, start=start, end=end)
+        sessions = {
+            pd.Timestamp(session).date()
+            for session in calendar.sessions_in_range(start, end)
+        }
+    except Exception:
+        # Keep missing years absent: callers will report gaps as unverified.
+        return {}
+    if not sessions:
+        return {}
     result = {}
     for year in range(start_year, end_year + 1):
         weekdays = pd.bdate_range(f"{year}-01-01", f"{year}-12-31")
