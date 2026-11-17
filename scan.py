@@ -111,27 +111,46 @@ SCAN_COLUMNS = [
 ]
 
 
+def _scanner_price_frame(raw):
+    """スキャナー用系列。OHLCがそろう行を保持し、Volume欠損で価格系列を詰めない。"""
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    required = ["Open", "High", "Low", "Close"]
+    if not set(required).issubset(raw.columns):
+        return pd.DataFrame()
+    # Volume is diagnostic/supporting data, not an input to price scores.
+    # Preserve its NaN so Volume_MA20 remains unavailable where appropriate,
+    # while keeping the original price-bar positions for all price indicators.
+    valid_ohlc = raw[required].notna().all(axis=1)
+    frame = raw.loc[valid_ohlc].copy()
+    frame.attrs["rows_dropped_by_dropna"] = int((~valid_ohlc).sum())
+    frame.attrs["raw_row_count"] = len(raw)
+    frame.attrs["volume_only_missing_rows"] = int(
+        (valid_ohlc & raw["Volume"].isna()).sum()
+    ) if "Volume" in raw.columns else 0
+    frame.attrs["_quality_raw"] = raw.copy()
+    return frame
+
+
 def _shape(df, symbol=None):
-    """一括取得の結果を、個別取得と同じOHLCV正規化で整える。"""
+    """一括取得を整形し、OHLC有効行をVolume欠損にかかわらず保持する。"""
     if df is None or df.empty:
         return pd.DataFrame()
     try:
-        raw, clean, error = analysis._split_raw_clean(df, symbol=symbol)
-        if raw is not None and not raw.empty:
-            # Diagnose original rows once, then retain only the compact report.
-            # The cleaned frame remains unchanged for indicator calculations.
-            clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
-            clean.attrs["raw_row_count"] = len(raw)
-            try:
-                market = analysis.market_of(symbol)
-                clean.attrs["_quality_report"] = data_quality.diagnose_history(
-                    raw,
-                    market=market,
-                    holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-                )
-            except Exception as exc:
-                clean.attrs["_quality_diagnostic_error"] = type(exc).__name__
-        return clean
+        raw, _legacy_clean, error = analysis._split_raw_clean(df, symbol=symbol)
+        if raw is None or raw.empty:
+            return pd.DataFrame()
+        shaped = _scanner_price_frame(raw)
+        try:
+            market = analysis.market_of(symbol)
+            shaped.attrs["_quality_report"] = data_quality.diagnose_history(
+                raw,
+                market=market,
+                holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+            )
+        except Exception as exc:
+            shaped.attrs["_quality_diagnostic_error"] = type(exc).__name__
+        return shaped
     except Exception:
         return pd.DataFrame()
 
@@ -223,7 +242,12 @@ def _data_quality_assessment(df, symbol):
 
     warnings = []
     if report.rows_with_missing:
-        warnings.append(f"欠損行の除外 {report.rows_with_missing}行（分析対象外）")
+        volume_only = int(df.attrs.get("volume_only_missing_rows", 0) or 0)
+        price_missing = int(df.attrs.get("rows_dropped_by_dropna", 0) or 0)
+        warnings.append(
+            f"欠損行を検出 {report.rows_with_missing}行"
+            f"（OHLC欠損で除外 {price_missing}行、Volumeのみ欠損で価格系列に保持 {volume_only}行）"
+        )
     if report.volume_issues.get("negative") or report.volume_issues.get("non_finite"):
         count = len(report.volume_issues.get("negative", [])) + len(report.volume_issues.get("non_finite", []))
         warnings.append(f"出来高異常 {count}件（現在のスコア計算対象外）")
@@ -266,6 +290,23 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
             )
             raw, err = single_fetcher(symbol)
+            # The legacy single-fetch helper may have already dropna()'d Volume-only
+            # rows. Recover its retained raw snapshot and rebuild the scanner series.
+            raw_attrs = getattr(raw, "attrs", {}) if raw is not None else {}
+            retained_raw = raw_attrs.get("_quality_raw")
+            if retained_raw is not None:
+                raw = _scanner_price_frame(retained_raw)
+                try:
+                    market = analysis.market_of(symbol)
+                    raw.attrs["_quality_report"] = data_quality.diagnose_history(
+                        retained_raw,
+                        market=market,
+                        holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+                    )
+                except Exception as exc:
+                    raw.attrs["_quality_diagnostic_error"] = type(exc).__name__
+                if not raw.empty:
+                    err = None
             single_dropped_rows = int(
                 getattr(raw, "attrs", {}).get("rows_dropped_by_dropna", 0) or 0
             )
@@ -314,7 +355,7 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             # a large diagnostic-only DataFrame through the analysis pipeline.
             for key in (
                 "_quality_raw", "_quality_report", "_quality_diagnostic_error",
-                "rows_dropped_by_dropna", "raw_row_count",
+                "rows_dropped_by_dropna", "raw_row_count", "volume_only_missing_rows",
             ):
                 raw.attrs.pop(key, None)
             df = analysis.add_indicators(raw)
