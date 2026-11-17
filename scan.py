@@ -273,7 +273,7 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                     base["データ最終日"] = str(raw.index[-1].date())
                 except Exception:
                     base["データ最終日"] = str(raw.index[-1])
-                base["警告・理由"] = "品質ゲートで分析保留：" + " / ".join(quality_blocks + quality_warnings)
+                base["警告・理由"] = "品質ゲートで分析保留：" + " / ".join(dict.fromkeys(quality_blocks + quality_warnings))
                 excluded.append(base)
                 if progress is not None:
                     progress(done, len(universe))
