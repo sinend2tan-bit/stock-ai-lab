@@ -111,7 +111,7 @@ def test_detail_tab_diagnosis_failure_shows_unavailable(monkeypatch):
 
 
 def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
-    # 診断対象は clean ではなく raw：履歴中のOHLC欠損行はスコア保留にする。
+    # 診断対象は clean ではなく raw：履歴中の欠損行は警告として数える。
     raw = _frame()
     raw.iloc[15, raw.columns.get_loc("Close")] = np.nan
     clean = raw.dropna().copy()
@@ -126,7 +126,7 @@ def test_detail_tab_diagnoses_raw_not_clean(monkeypatch):
     texts = _all_text(at)
     assert any("欠損行（dropna除外候補）：1行" in t for t in texts)
     metric_labels = [m.label for m in at.metric]
-    assert "条件スコア" not in metric_labels
+    assert "条件スコア" in metric_labels
 
 
 def test_detail_tab_fetches_bundle_once(monkeypatch):
