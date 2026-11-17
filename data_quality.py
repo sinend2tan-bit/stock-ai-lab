@@ -431,6 +431,7 @@ def diagnose_history(
     # ---- 価格の整合性 ----
     price_issues = {
         "non_finite": [],
+        "non_numeric": [],
         "non_positive": [],
         "high_below_open_close": [],
         "low_above_open_close": [],
@@ -444,7 +445,14 @@ def diagnose_history(
         arrays[col] = arr
         for i in range(n):
             v = arr[i]
-            if not np.isfinite(v):
+            if np.isnan(v) and not pd.isna(view[col].iloc[i]):
+                price_issues["non_numeric"].append(
+                    {
+                        "row": i, "date": labels[i], "column": col,
+                        "detail": f"non-numeric value={str(view[col].iloc[i])[:40]}",
+                    }
+                )
+            elif not np.isfinite(v):
                 kind = "NaN" if np.isnan(v) else ("inf" if v > 0 else "-inf")
                 price_issues["non_finite"].append(
                     {"row": i, "date": labels[i], "column": col, "detail": kind}
