@@ -85,7 +85,7 @@ def test_scoring_frame_keeps_price_bars_when_volume_is_missing():
     score_frame = analysis_quality.scoring_frame(raw)
     assert score_frame.index.equals(clean.index)
     assert score_frame["Close"].equals(clean["Close"])
-    assert pd.isna(score_frame.iloc[2]["Volume"])
+    assert pd.isna(score_frame.loc[idx[150], "Volume"])
 
     clean_indicators = analysis.add_indicators(analysis_quality.scoring_frame(clean))
     raw_indicators = analysis.add_indicators(score_frame)
