@@ -37,6 +37,16 @@ def test_volume_only_missing_is_warning_not_score_blocker():
     assert report.volume_issues["non_finite"]
 
 
+def test_interior_ohlc_missing_blocks_score():
+    data = frame()
+    data.iloc[2, data.columns.get_loc("Close")] = float("nan")
+    report, reasons, error = analysis_quality.assess(data, "7203.T")
+    assert error is None
+    assert report is not None
+    assert any("履歴中のOHLC欠損" in reason for reason in reasons)
+
+
+
 def test_ohlc_contradiction_blocks_score():
     data = frame()
     data.iloc[2, data.columns.get_loc("High")] = 90.0
