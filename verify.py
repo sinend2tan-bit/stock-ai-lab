@@ -147,11 +147,12 @@ def _verification_price_frame(raw):
 def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
     """1銘柄分の過去検証を行う。
 
-    raw は fetch_history で取得した日足（失敗時は空のDataFrame）。
+    raw は fetch_history_bundle の取得直後OHLCV（日付・欠損行を保持）。
     戻り値: (records, exclusions)
       records: 評価できた地点と、地点ごとの判定保留の記録（辞書のリスト）
       exclusions: 対象外の集計（辞書のリスト：時間軸・理由・件数）
-    評価は「評価日までの切り取りデータ」だけで指標計算して行う。
+    評価は「評価日までの有効OHLCバー」だけで指標計算する。履歴中の孤立OHLC欠損は
+    指標入力から除き、欠損日が前方測定窓に入る評価地点だけを時間軸別に保留する。
     """
     records = []
     exclusions = []
@@ -277,7 +278,7 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
 
 
 def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progress=None):
-    """複数銘柄を検証する。fetcher(symbol) は (DataFrame, error) を返す関数。
+    """複数銘柄を検証する。fetcher(symbol) は raw OHLCV と error を返す関数。
 
     取得に失敗した銘柄は対象外として記録し、他銘柄の検証は続ける。
     progress が渡された場合は、銘柄が終わるごとに progress(完了数, 全体数) を呼ぶ。
