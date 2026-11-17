@@ -169,6 +169,24 @@ def test_scan_quality_gap_warning_ignores_official_jp_holiday():
     )
     warnings = scan._data_quality_warnings(frame, "7203.T")
     assert not any("日付間隔の要確認" in warning for warning in warnings)
+    assert not any("判定不能" in warning for warning in warnings)
+
+
+def test_scan_quality_gap_without_calendar_is_reported_as_unverified():
+    dates = pd.to_datetime(["2024-01-05", "2024-01-09"])
+    frame = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [101.0, 102.0],
+            "Low": [99.0, 100.0],
+            "Close": [100.5, 101.5],
+            "Volume": [1000, 1100],
+        },
+        index=dates,
+    )
+    warnings = scan._data_quality_warnings(frame, "7203.T")
+    assert any("判定不能" in warning for warning in warnings)
+    assert not any("日付間隔の要確認" in warning for warning in warnings)
 
 
 def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
