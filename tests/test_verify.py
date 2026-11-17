@@ -130,6 +130,26 @@ def test_verification_missing_ohlc_is_warning_and_only_overlapping_forward_windo
     assert any(r["評価日"] > str(missing_date.date()) for r in records)
 
 
+
+def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_horizons():
+    frame = rising_frame(500)
+    missing_pos = 50
+    frame.iloc[missing_pos, frame.columns.get_loc("Close")] = float("nan")
+    target_pos = 304  # 305 rows from source; long horizon has 254 contiguous bars after the gap
+    records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
+    target = next(
+        r for r in records
+        if r["時間軸"] == "長期"
+        and r["評価日"] == str(frame.index[target_pos].date())
+    )
+    direct_segment = frame.iloc[missing_pos + 1 : target_pos + 1].copy()
+    direct = analysis.assess_all(
+        analysis.add_indicators(direct_segment)
+    )["長期"]
+    assert target["スコア"] == direct["score"]
+    assert target["測定日"] == str(frame.index[target_pos + verify.WINDOWS["長期"]].date())
+
+
 def test_verification_allows_volume_only_missing_value():
     frame = rising_frame(400)
     frame.iloc[150, frame.columns.get_loc("Volume")] = float("nan")
