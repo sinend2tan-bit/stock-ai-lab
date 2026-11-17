@@ -143,15 +143,17 @@ def test_dates_future_as_of_takes_precedence_over_market():
     assert r.future_dates == [{"row": 4, "date": "2024-01-10"}]
 
 
-def test_gap_skipping_weekday_is_review_only():
-    # 金→火で月曜を飛ばす間隔は、休場日の可能性があるため異常確定せず「要確認」
+def test_gap_without_complete_calendar_is_unverified_not_a_missing_trading_day():
+    # カレンダー未提供の金→火は、月曜が祝日か判断できないため「判定不能」。
     dates = ["2024-01-05", "2024-01-09"]
     r = diagnose_history(make_frame(dates), as_of=AS_OF)
-    assert len(r.review_gaps) == 1
-    assert r.review_gaps[0]["from_date"] == "2024-01-05"
-    assert r.review_gaps[0]["to_date"] == "2024-01-09"
-    assert r.review_gaps[0]["skipped_weekdays"] == 1
-    assert r.review_count == 1
+    assert r.review_gaps == []
+    assert r.review_count == 0
+    assert r.unverified_gap_count == 1
+    assert r.unverified_gaps[0]["from_date"] == "2024-01-05"
+    assert r.unverified_gaps[0]["to_date"] == "2024-01-09"
+    assert r.unverified_gaps[0]["skipped_weekdays"] == 1
+    assert r.unverified_gaps[0]["calendar_years_missing"] == [2024]
     assert r.anomaly_count == 0
 
 
@@ -163,6 +165,7 @@ def test_known_market_holiday_is_not_reported_as_missing_trading_day():
     )
     assert r.review_gaps == []
     assert r.review_count == 0
+    assert r.unverified_gaps == []
 
 
 def test_market_gap_counts_only_non_holiday_weekdays():
@@ -175,6 +178,19 @@ def test_market_gap_counts_only_non_holiday_weekdays():
     assert r.review_gaps[0]["skipped_weekdays"] == 2
     assert r.review_gaps[0]["skipped_holidays"] == 1
     assert r.review_gaps[0]["skipped_trading_days"] == 1
+    assert r.unverified_gaps == []
+
+
+def test_partial_calendar_does_not_promote_unknown_year_gap_to_review():
+    dates = ["2024-12-30", "2025-01-06"]
+    holidays = {2026: {pd.Timestamp("2026-01-01").date()}}
+    r = diagnose_history(
+        make_frame(dates), market="JP", holidays_by_year=holidays
+    )
+    assert r.review_gaps == []
+    assert r.review_count == 0
+    assert r.unverified_gap_count == 1
+    assert r.unverified_gaps[0]["calendar_years_missing"] == [2024, 2025]
 
 
 def test_dates_string_index_accepted():
