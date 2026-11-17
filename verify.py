@@ -134,6 +134,26 @@ def _verification_quality_report(symbol, raw):
     return report, list(dict.fromkeys(issues))
 
 
+def _is_volume_only_or_missing_row_normalization_error(raw, error):
+    """Recognize only known dropna/Volume normalization errors with raw OHLC intact.
+
+    Other non-empty-payload errors remain fail-closed; do not turn an arbitrary
+    normalization failure into permission to evaluate.
+    """
+    if not error or not isinstance(raw, pd.DataFrame) or raw.empty:
+        return False
+    if raw.columns.duplicated().any():
+        return False
+    price_columns = {"Open", "High", "Low", "Close"}
+    if not price_columns.issubset(raw.columns):
+        return False
+    if "Volume" not in raw.columns and "必要な列" in str(error):
+        return True
+    if "欠損のみ" in str(error) and raw.isna().any().any():
+        return True
+    return False
+
+
 def _verification_price_frame(raw):
     """Keep valid OHLC bars; preserve Volume NA as NaN (Volume is not a score input)."""
     price_columns = ["Open", "High", "Low", "Close"]
@@ -226,6 +246,13 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
             "品質警告",
             "出来高列が欠落（現在の価格ベース判定には使用しないためスコアは継続）",
             1,
+        )
+    volume_missing_rows = int(report.missing_per_column.get("Volume", 0) or 0)
+    if volume_missing_rows:
+        add_exclusion(
+            "品質警告",
+            "出来高欠損行あり（現在の価格ベース判定には使用せず、価格バーは保持）",
+            volume_missing_rows,
         )
     if report.warning_count:
         add_exclusion(
@@ -343,6 +370,12 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
     fetch_info = []
     for done, symbol in enumerate(symbols, start=1):
         raw, err = fetcher(symbol)
+        if _is_volume_only_or_missing_row_normalization_error(raw, err):
+            # fetch_history_bundle's legacy all-column dropna contract can report
+            # an error even though the raw OHLC timeline is usable. Only these
+            # explicitly recognized missing-data cases are delegated to the
+            # verifier's OHLC-specific quality gate.
+            err = None
         if raw is None or raw.empty:
             recs, excls = verify_symbol(symbol, pd.DataFrame(), period_label, run_at)
             records.extend(recs)
