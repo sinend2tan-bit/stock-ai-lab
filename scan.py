@@ -116,13 +116,14 @@ def _scanner_price_frame(raw):
     if raw is None or raw.empty:
         return pd.DataFrame()
     required = ["Open", "High", "Low", "Close"]
-    if not set(analysis.NEEDED_COLUMNS).issubset(raw.columns):
+    if not set(required).issubset(raw.columns) or raw.columns.duplicated().any():
         return pd.DataFrame()
     # Volume is diagnostic/supporting data, not an input to price scores.
-    # Preserve its NaN so Volume_MA20 remains unavailable where appropriate,
-    # while keeping the original price-bar positions for all price indicators.
+    # Preserve NaN (or a missing column) as unknown; never drop valid OHLC bars.
     valid_ohlc = raw[required].notna().all(axis=1)
     frame = raw.loc[valid_ohlc].copy()
+    if "Volume" not in frame.columns:
+        frame["Volume"] = np.nan
     frame.attrs["rows_dropped_by_dropna"] = int((~valid_ohlc).sum())
     frame.attrs["raw_row_count"] = len(raw)
     frame.attrs["volume_only_missing_rows"] = int(
