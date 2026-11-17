@@ -44,6 +44,12 @@ def _all_text(at):
     return texts
 
 
+def test_watchlist_overview_uses_raw_bundle_and_shared_quality_gate():
+    source = Path(APP_PATH).read_text(encoding="utf-8")
+    assert "raw, clean, err = get_history_bundle(sym, period)" in source
+    assert "quality_report, quality_blocks, quality_error = assess_data_quality(raw, sym)" in source
+
+
 def test_detail_tab_volume_warning_does_not_block_scores(monkeypatch):
     raw = _frame()
     raw.iloc[10, raw.columns.get_loc("Volume")] = 0.0  # スコア計算対象外の警告候補
