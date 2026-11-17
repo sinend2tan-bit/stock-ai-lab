@@ -78,7 +78,7 @@ def test_detail_tab_missing_columns_shows_diagnosis_and_no_analysis(monkeypatch)
     assert not at.exception
     texts = _all_text(at)
     assert any("必要な列" in t for t in texts)
-    assert any("分析は行いません" in t for t in texts)
+    assert any("分析を保留します" in t for t in texts)
     # 分析不可でも、取得直後データの診断（必須列欠落）は表示される
     assert any("データ品質診断（取得直後データ）" in t for t in texts)
     assert any("必須列の欠落" in t or "異常候補" in t for t in texts)
