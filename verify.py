@@ -308,11 +308,19 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                 # records from such a payload even if a partial diagnostic passes.
                 recs = []
                 excls = [e for e in excls if e.get("時間軸") != "品質警告"]
-                excls.append({
-                    "銘柄": symbol, "時間軸": "全体",
-                    "理由": "取得データの整形エラーにより過去検証を保留: " + str(err)[:160],
-                    "件数": 1,
-                })
+                existing_hold = next(
+                    (e for e in excls if e.get("時間軸") == "全体"),
+                    None,
+                )
+                error_reason = "取得データの整形エラー: " + str(err)[:160]
+                if existing_hold:
+                    existing_hold["理由"] += " / " + error_reason
+                else:
+                    excls.append({
+                        "銘柄": symbol, "時間軸": "全体",
+                        "理由": error_reason,
+                        "件数": 1,
+                    })
             records.extend(recs)
             exclusions.extend(excls)
             quality_exclusion = next(
