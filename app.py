@@ -342,7 +342,7 @@ with tab_overview:
                     note = (note + " / " if note else "") + " / ".join(quality_blocks)
                     labels = {h: "判定保留（データ品質）" for h in ["短期", "中期", "長期"]}
                 else:
-                    state = "取得成功"
+                    state = analysis.freshness_status_label(fresh["status"])
                     results = analysis.assess_all(df)
                     labels = {
                         "短期": results["短期"]["label"] if results["短期"]["available"] else "判定保留",
