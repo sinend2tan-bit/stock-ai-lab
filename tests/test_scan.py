@@ -193,6 +193,28 @@ def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
     assert any("最新行の価格データ欠損：Close" in item for item in blocks)
 
 
+def test_clean_frame_for_forward_strips_raw_diagnostic_attrs():
+    frame = rising()
+    frame.attrs["_quality_raw"] = frame.copy()
+    frame.attrs["_quality_report"] = object()
+    frame.attrs["_quality_diagnostic_error"] = "RuntimeError"
+    frame.attrs["rows_dropped_by_dropna"] = 1
+    frame.attrs["raw_row_count"] = len(frame)
+
+    captured = scan.clean_frame_for_forward(frame)
+
+    assert captured.equals(frame)
+    assert all(
+        key not in captured.attrs
+        for key in (
+            "_quality_raw", "_quality_report", "_quality_diagnostic_error",
+            "rows_dropped_by_dropna", "raw_row_count",
+        )
+    )
+    # Sanitization is non-mutating; scan can still consume the original metadata.
+    assert "_quality_raw" in frame.attrs
+
+
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
     dates = pd.to_datetime(["2026-11-02", "2026-11-04"])
     frame = pd.DataFrame(
@@ -383,7 +405,7 @@ def test_scan_displays_historical_missing_row_warning_without_blocking_unverifie
     )
     assert len(ranked) == 1 and excluded == []
     assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
-    assert "判定不能" in ranked[0]["警告・理由"]
+    assert "品質ゲートで分析保留" not in ranked[0]["警告・理由"]
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
