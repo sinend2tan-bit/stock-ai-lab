@@ -292,7 +292,7 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
     fetch_info = []
     for done, symbol in enumerate(symbols, start=1):
         raw, err = fetcher(symbol)
-        if err is not None or raw is None or raw.empty:
+        if raw is None or raw.empty:
             recs, excls = verify_symbol(symbol, pd.DataFrame(), period_label, run_at)
             records.extend(recs)
             exclusions.extend(excls)
@@ -302,6 +302,17 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
             })
         else:
             recs, excls = verify_symbol(symbol, raw, period_label, run_at)
+            if err is not None:
+                # Non-empty raw payloads can still carry a normalization/cleaning
+                # error (for example, every row was dropped). Do not publish
+                # records from such a payload even if a partial diagnostic passes.
+                recs = []
+                excls = [e for e in excls if e.get("時間軸") != "品質警告"]
+                excls.append({
+                    "銘柄": symbol, "時間軸": "全体",
+                    "理由": "取得データの整形エラーにより過去検証を保留: " + str(err)[:160],
+                    "件数": 1,
+                })
             records.extend(recs)
             exclusions.extend(excls)
             quality_exclusion = next(
