@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import exchange_calendars as xcals
 
 # 市場ごとのタイムゾーン。新旧判定の「今日」は市場の現地日付で数える。
 MARKET_TIMEZONES = {
@@ -18,11 +19,38 @@ MARKET_TIMEZONES = {
     "US": ZoneInfo("America/New_York"),
 }
 
-# 公式取引所の休業日（株式市場）。年ごとに手動更新し、未登録年は暦日判定へ
-# 保守的にフォールバックする。土日は別途除外する。短縮取引日は営業日扱い。
-# 出典確認日: 2026-11-14。JPX現物、米国株式（NYSE/Nasdaq共通休業日）。
+def _exchange_holidays(calendar_name, start_year, end_year):
+    """Build weekday closures from the pinned exchange_calendars session schedule.
+
+    Only dates in the requested calendar's covered range are returned. If the
+    package/calendar cannot supply a complete range, return no entries so the
+    quality gate reports the uncovered years as unverified rather than guessing.
+    """
+    start = f"{start_year}-01-01"
+    end = f"{end_year}-12-31"
+    calendar = xcals.get_calendar(calendar_name, start=start, end=end)
+    sessions = {
+        pd.Timestamp(session).date()
+        for session in calendar.sessions_in_range(start, end)
+    }
+    result = {}
+    for year in range(start_year, end_year + 1):
+        weekdays = pd.bdate_range(f"{year}-01-01", f"{year}-12-31")
+        result[year] = frozenset(
+            day.date() for day in weekdays if day.date() not in sessions
+        )
+    return result
+
+
+# 2021–2025: pinned exchange_calendars session schedules (XTKS / XNYS).
+# 2026–2027: manually maintained closure sets, retained unchanged for this PR.
+# Saturdays/Sundays are excluded separately; early closes remain sessions.
+_HISTORICAL_JP_HOLIDAYS = _exchange_holidays("XTKS", 2021, 2025)
+_HISTORICAL_US_HOLIDAYS = _exchange_holidays("XNYS", 2021, 2025)
+
 MARKET_HOLIDAYS = {
     "JP": {
+        **_HISTORICAL_JP_HOLIDAYS,
         2026: frozenset(date.fromisoformat(x) for x in (
             "2026-01-01", "2026-01-02", "2026-01-12", "2026-02-11",
             "2026-02-23", "2026-03-20", "2026-04-29", "2026-05-03",
@@ -39,6 +67,7 @@ MARKET_HOLIDAYS = {
         )),
     },
     "US": {
+        **_HISTORICAL_US_HOLIDAYS,
         2026: frozenset(date.fromisoformat(x) for x in (
             "2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03",
             "2026-05-25", "2026-06-19", "2026-07-03", "2026-09-07",
@@ -51,7 +80,10 @@ MARKET_HOLIDAYS = {
         )),
     },
 }
-MARKET_CALENDAR_NAMES = {"JP": "JPX現物", "US": "NYSE（Nasdaqの2026年休業日と照合）"}
+MARKET_CALENDAR_NAMES = {
+    "JP": "exchange_calendars XTKS（2021–2025）+ 手動確認（2026–2027）",
+    "US": "exchange_calendars XNYS（2021–2025）+ 手動確認（2026–2027）",
+}
 
 # 区分ごとの最低データ本数（初期の運用基準。精度を保証する数字ではない）
 MIN_BARS_SHORT = 30
