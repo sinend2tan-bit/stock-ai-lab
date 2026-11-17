@@ -472,6 +472,30 @@ def test_scan_shape_preserves_missing_row_drop_count():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
+def test_scanner_indicator_calculation_restarts_after_historical_ohlc_gap():
+    frame = rising()
+    gap_position = 10
+    frame.iloc[gap_position, frame.columns.get_loc("Close")] = float("nan")
+    snapshot = frame.copy(deep=True)
+
+    shaped = scan._shape(frame, symbol="7203.T")
+    assert len(shaped) == len(frame) - 1
+    assert "_quality_raw" in shaped.attrs
+
+    # The first valid bar after the missing OHLC row starts a new segment:
+    # Return_1 must be NaN instead of using the close before the missing row.
+    features = scan._add_indicators_by_valid_ohlc_segments(
+        shaped.attrs["_quality_raw"]
+    )
+    after_gap = frame.index[gap_position + 1]
+    assert pd.isna(features.loc[after_gap, "Return_1"])
+
+    # The same timestamp is a normal adjacent-bar return without the gap.
+    continuous = scan._add_indicators_by_valid_ohlc_segments(rising())
+    assert np.isfinite(continuous.loc[after_gap, "Return_1"])
+    pd.testing.assert_frame_equal(frame, snapshot)
+
+
 def test_scan_shape_retains_ohlc_bar_when_only_volume_is_missing():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
