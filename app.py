@@ -621,13 +621,13 @@ with tab_scan:
             batch = get_batch(tuple(syms), scan.SCAN_PERIOD)
             for sym, (df, err) in batch.items():
                 if err is None and df is not None and not df.empty:
-                    captured_frames[sym] = df.copy()
+                    captured_frames[sym] = scan.clean_frame_for_forward(df)
             return batch
 
         def single_fetcher(symbol):
             df, err = analysis.fetch_history(symbol, scan.SCAN_PERIOD)
             if err is None and df is not None and not df.empty:
-                captured_frames[symbol] = df.copy()
+                captured_frames[symbol] = scan.clean_frame_for_forward(df)
             return df, err
 
         ranked, excluded, meta = scan.run_scan(

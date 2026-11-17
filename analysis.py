@@ -215,6 +215,7 @@ def _split_raw_clean(df, symbol=None):
         # rows omitted by dropna for read-only scan diagnostics.
         clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
         clean.attrs["raw_row_count"] = len(raw)
+        clean.attrs["_quality_raw"] = raw.copy()
     except Exception as exc:
         return pd.DataFrame(), pd.DataFrame(), f"取得データの整形でエラーが発生しました（{type(exc).__name__}: {str(exc)[:120]}）"
     if clean.empty:

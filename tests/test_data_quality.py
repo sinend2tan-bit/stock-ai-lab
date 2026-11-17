@@ -179,6 +179,7 @@ def test_market_gap_counts_only_non_holiday_weekdays():
     assert r.review_gaps[0]["skipped_holidays"] == 1
     assert r.review_gaps[0]["skipped_trading_days"] == 1
     assert r.unverified_gaps == []
+    assert any("営業日欠損候補" in reason for reason in r.blocking_reasons())
 
 
 def test_partial_calendar_does_not_promote_unknown_year_gap_to_review():
@@ -716,6 +717,70 @@ def test_boundary_non_numeric_strings_nan_in_prices_not_in_missing():
     )
     assert r.missing_per_column["Close"] == 0
     assert r.rows_dropped_by_dropna == 0
+
+
+def test_missing_cells_identify_price_and_volume_fields_without_double_counting():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, 100.0, 100.0, 100.0],
+        volume=[1000.0, 1000.0, np.nan, 1000.0, 1000.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.missing_cells == [
+        {"row": 2, "date": "2024-01-08", "columns": ["Volume"]}
+    ]
+    assert r.blocking_reasons() == []
+
+    price_missing = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, np.nan, 100.0, 100.0],
+    )
+    rp = diagnose_history(price_missing, as_of=AS_OF)
+    # An isolated historical row is dropped from indicators and reported, not
+    # enough by itself to suppress an otherwise usable ticker.
+    assert rp.blocking_reasons() == []
+
+    latest_missing = make_frame(
+        NORMAL_DATES,
+        close=[100.0, 100.0, 100.0, 100.0, np.nan],
+    )
+    rl = diagnose_history(latest_missing, as_of=AS_OF)
+    assert rl.blocking_reasons() == ["最新行の価格データ欠損：Close"]
+
+
+def test_invalid_numeric_price_string_blocks_but_true_nan_is_counted_once():
+    df = make_frame(
+        NORMAL_DATES,
+        close=["abc", 100.0, 100.0, 100.0, np.nan],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    reasons = r.blocking_reasons()
+    assert any("最新行の価格データ欠損：Close" in reason for reason in reasons)
+    assert any("OHLC価格異常 1件" in reason for reason in reasons)
+    assert not any("OHLC価格異常 2件" in reason for reason in reasons)
+
+
+def test_non_numeric_price_value_is_not_misclassified_as_true_missing():
+    df = make_frame(
+        NORMAL_DATES,
+        close=["abc", 100.0, 100.0, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert r.rows_with_missing == 0
+    assert r.missing_cells == []
+    assert len(r.non_numeric_price_values) == 1
+    assert [e["row"] for e in r.price_issues["non_finite"]] == [0]
+    assert r.blocking_reasons() == ["OHLC価格異常 1件"]
+
+
+def test_infinite_price_value_blocks_as_non_finite():
+    df = make_frame(
+        NORMAL_DATES,
+        close=[100.0, float("inf"), 100.0, 100.0, 100.0],
+    )
+    r = diagnose_history(df, as_of=AS_OF)
+    assert len(r.price_issues["non_finite"]) == 1
+    assert r.blocking_reasons() == ["OHLC価格異常 1件"]
 
 
 def test_boundary_decimal_values():

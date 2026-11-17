@@ -117,12 +117,20 @@ def _shape(df, symbol=None):
         return pd.DataFrame()
     try:
         raw, clean, error = analysis._split_raw_clean(df, symbol=symbol)
-        if error:
-            # Keep diagnostic metadata even when every row is excluded by dropna().
-            if raw is not None and not raw.empty:
-                clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
-                clean.attrs["raw_row_count"] = len(raw)
-            return clean
+        if raw is not None and not raw.empty:
+            # Diagnose original rows once, then retain only the compact report.
+            # The cleaned frame remains unchanged for indicator calculations.
+            clean.attrs["rows_dropped_by_dropna"] = int(raw.isna().any(axis=1).sum())
+            clean.attrs["raw_row_count"] = len(raw)
+            try:
+                market = analysis.market_of(symbol)
+                clean.attrs["_quality_report"] = data_quality.diagnose_history(
+                    raw,
+                    market=market,
+                    holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+                )
+            except Exception as exc:
+                clean.attrs["_quality_diagnostic_error"] = type(exc).__name__
         return clean
     except Exception:
         return pd.DataFrame()
@@ -168,6 +176,24 @@ def fetch_batch(symbols, period=SCAN_PERIOD):
     return results
 
 
+def clean_frame_for_forward(df):
+    """Forward検証へ渡すclean OHLCVだけを複製し、診断用attrsを除去する。
+
+    single-fetch fallbackでは元OHLCVが診断用attrsに保持されるため、
+    そのままセッション保存・V2検証へ複製しない。
+    """
+    if df is None:
+        return None
+    # Build from copied Series rather than DataFrame.copy(): pandas deep-copies
+    # DataFrame.attrs, which would transiently duplicate the retained raw frame.
+    captured = pd.DataFrame(
+        {column: df[column].copy(deep=True) for column in df.columns},
+        index=df.index.copy(),
+    )
+    captured.columns = df.columns.copy()
+    return captured
+
+
 def _score_key(row):
     """並び順：中期→長期→短期のスコア降順、最後はコード順（決定的にする）。"""
     def val(score):
@@ -175,32 +201,48 @@ def _score_key(row):
     return (-val(row["中期スコア"]), -val(row["長期スコア"]), -val(row["短期スコア"]), row["コード"])
 
 
-def _data_quality_warnings(df, symbol):
-    """スキャン用のデータ品質警告を作る。診断結果は表示だけに使う。"""
-    try:
-        market = analysis.market_of(symbol)
-        report = data_quality.diagnose_history(
-            df,
-            market=market,
-            holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
-        )
-    except Exception as exc:
-        return [f"データ品質診断不能（{type(exc).__name__}）"]
+def _data_quality_assessment(df, symbol):
+    """元データ品質を診断し、ランキング保留理由と警告を分けて返す。"""
+    diagnostic_error = df.attrs.get("_quality_diagnostic_error")
+    report = df.attrs.get("_quality_report")
+    if diagnostic_error:
+        reason = f"データ品質診断不能（{diagnostic_error}）"
+        return [reason], [reason]
+    if report is None:
+        try:
+            market = analysis.market_of(symbol)
+            quality_raw = df.attrs.get("_quality_raw", df)
+            report = data_quality.diagnose_history(
+                quality_raw,
+                market=market,
+                holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
+            )
+        except Exception as exc:
+            reason = f"データ品質診断不能（{type(exc).__name__}）"
+            return [reason], [reason]
+
     warnings = []
-    dropped_rows = int(df.attrs.get("rows_dropped_by_dropna", 0) or 0)
-    if dropped_rows:
-        warnings.append(f"欠損行の除外 {dropped_rows}行（分析対象外）")
-    if report.anomaly_count:
-        warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
+    if report.rows_with_missing:
+        warnings.append(f"欠損行の除外 {report.rows_with_missing}行（分析対象外）")
+    if report.volume_issues.get("negative") or report.volume_issues.get("non_finite"):
+        count = len(report.volume_issues.get("negative", [])) + len(report.volume_issues.get("non_finite", []))
+        warnings.append(f"出来高異常 {count}件（現在のスコア計算対象外）")
     if report.warning_count:
         warnings.append(f"出来高ゼロの警告候補 {report.warning_count}件")
     if report.review_count:
-        warnings.append(f"日付間隔の要確認 {report.review_count}件")
+        warnings.append(f"公式カレンダー上の日付間隔の要確認 {report.review_count}件")
     if report.unverified_gap_count:
         warnings.append(
             f"休場日カレンダー不足で判定不能の間隔 {report.unverified_gap_count}件"
         )
-    return warnings
+    if report.anomaly_count:
+        warnings.append(f"データ品質の異常候補 {report.anomaly_count}件")
+    return warnings, report.blocking_reasons()
+
+
+def _data_quality_warnings(df, symbol):
+    """既存テスト・表示互換の品質警告一覧。"""
+    return _data_quality_assessment(df, symbol)[0]
 
 
 def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None):
@@ -255,7 +297,26 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             base["警告・理由"] = f"取得失敗：{failure_reason}"
             excluded.append(base)
         else:
-            quality_warnings = _data_quality_warnings(raw, symbol)
+            quality_warnings, quality_blocks = _data_quality_assessment(raw, symbol)
+            if quality_blocks:
+                base["区分"] = "参考外"
+                base["本数"] = len(raw)
+                try:
+                    base["データ最終日"] = str(raw.index[-1].date())
+                except Exception:
+                    base["データ最終日"] = str(raw.index[-1])
+                base["警告・理由"] = "品質ゲートで分析保留：" + " / ".join(dict.fromkeys(quality_blocks + quality_warnings))
+                excluded.append(base)
+                if progress is not None:
+                    progress(done, len(universe))
+                continue
+            # Remove the retained raw frame before indicator copies to avoid carrying
+            # a large diagnostic-only DataFrame through the analysis pipeline.
+            for key in (
+                "_quality_raw", "_quality_report", "_quality_diagnostic_error",
+                "rows_dropped_by_dropna", "raw_row_count",
+            ):
+                raw.attrs.pop(key, None)
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)

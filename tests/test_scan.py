@@ -1,5 +1,8 @@
 """スキャン機能（scan.py）の単体テスト。ネットワークは使わない。"""
 
+import ast
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -138,7 +141,7 @@ def test_stale_data_goes_to_excluded():
     assert "古い可能性" in excluded[0]["警告・理由"]
 
 
-def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
+def test_scan_holds_invalid_ohlc_before_ranking(monkeypatch):
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("High")] = (
         frame.iloc[-1]["Close"] * 0.5
@@ -150,9 +153,131 @@ def test_scan_shows_quality_anomaly_without_changing_rank(monkeypatch):
         lambda symbol: (frame, None),
         run_at="quality-warning-test",
     )
-    assert len(ranked) == 1
-    assert excluded == []
-    assert "データ品質の異常候補" in ranked[0]["警告・理由"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "OHLC価格異常" in excluded[0]["警告・理由"]
+
+
+def test_scan_diagnostic_failure_fails_closed(monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("diagnostic unavailable")
+
+    monkeypatch.setattr(scan.data_quality, "diagnose_history", fail)
+    frame = rising()
+    universe = [("DIAGFAIL.T", "診断失敗社", "テスト")]
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        lambda syms: {"DIAGFAIL.T": (frame, None)},
+        lambda symbol: (frame, None),
+        run_at="quality-diagnostic-failure-test",
+    )
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "データ品質診断不能" in excluded[0]["警告・理由"]
+
+
+def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
+    shaped = scan._shape(frame, symbol="7203.T")
+    assert len(shaped) == len(frame) - 1
+    assert "_quality_report" in shaped.attrs
+    assert shaped.attrs["_quality_report"].rows_with_missing == 1
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert blocks == []
+    assert any("欠損行の除外 1行" in item for item in warnings)
+
+
+def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
+    frame = rising()
+    frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
+    shaped = scan._shape(frame, symbol="7203.T")
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert any("最新行の価格データ欠損：Close" in item for item in blocks)
+
+
+def test_app_batch_and_single_fetch_callbacks_capture_sanitized_frames():
+    source = (Path(__file__).resolve().parents[1] / "app.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "clean_frame_for_forward"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "scan"
+    ]
+    assert len(calls) == 2
+
+
+def test_scan_quality_gate_synthetic_60_ticker_universe_exclusion_reasons():
+    universe = []
+    frames = {}
+
+    def add_group(prefix, count, defect=None):
+        for i in range(count):
+            symbol = f"{prefix}{i:02d}.T"
+            frame = rising()
+            if defect == "volume_missing":
+                frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
+            elif defect == "latest_price_missing":
+                frame.iloc[-1, frame.columns.get_loc("Close")] = float("nan")
+            elif defect == "ohlc_contradiction":
+                frame.iloc[10, frame.columns.get_loc("High")] = (
+                    frame.iloc[10]["Close"] * 0.5
+                )
+            elif defect == "malformed_price":
+                frame["Close"] = frame["Close"].astype(object)
+                frame.iloc[10, frame.columns.get_loc("Close")] = "not-a-price"
+            frames[symbol] = frame
+            universe.append((symbol, symbol, "合成テスト"))
+
+    add_group("N", 50)
+    add_group("V", 4, "volume_missing")
+    add_group("L", 2, "latest_price_missing")
+    add_group("O", 2, "ohlc_contradiction")
+    add_group("M", 2, "malformed_price")
+    assert len(universe) == 60
+
+    def batch_fetcher(symbols):
+        return {
+            symbol: (scan._shape(frames[symbol], symbol=symbol), None)
+            for symbol in symbols
+        }
+
+    ranked, excluded, _ = scan.run_scan(
+        universe,
+        batch_fetcher,
+        lambda symbol: (scan._shape(frames[symbol], symbol=symbol), None),
+        run_at="synthetic-60-quality-gate",
+    )
+
+    assert len(ranked) == 54
+    assert len(excluded) == 6
+    assert sum("最新行の価格データ欠損" in row["警告・理由"] for row in excluded) == 2
+    assert sum("OHLC価格異常" in row["警告・理由"] for row in excluded) == 4
+    ranked_symbols = {row["コード"] for row in ranked}
+    assert all(f"V{i:02d}.T" in ranked_symbols for i in range(4))
+    assert all(
+        "欠損行の除外 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
+        for i in range(4)
+    )
+
+
+def test_clean_frame_for_forward_strips_raw_diagnostic_attrs():
+    frame = rising()
+    frame.attrs["_quality_raw"] = frame.copy()
+    frame.attrs["_quality_report"] = object()
+    frame.attrs["_quality_diagnostic_error"] = "RuntimeError"
+    frame.attrs["rows_dropped_by_dropna"] = 1
+    frame.attrs["raw_row_count"] = len(frame)
+
+    captured = scan.clean_frame_for_forward(frame)
+
+    assert captured.equals(frame)
+    assert captured.attrs == {}
+    # Sanitization is non-mutating; scan can still consume the original metadata.
+    assert "_quality_raw" in frame.attrs
 
 
 def test_scan_quality_gap_warning_ignores_official_jp_holiday():
@@ -189,7 +314,7 @@ def test_scan_quality_gap_without_calendar_is_reported_as_unverified():
     assert not any("日付間隔の要確認" in warning for warning in warnings)
 
 
-def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
+def test_scan_quality_diagnostic_failure_is_visible_and_fails_closed(monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("diagnostic unavailable")
 
@@ -202,9 +327,9 @@ def test_scan_quality_diagnostic_failure_is_visible(monkeypatch):
         lambda symbol: (frame, None),
         run_at="quality-diagnostic-failure-test",
     )
-    assert len(ranked) == 1
-    assert excluded == []
-    assert "データ品質診断不能" in ranked[0]["警告・理由"]
+    assert ranked == []
+    assert len(excluded) == 1
+    assert "データ品質診断不能" in excluded[0]["警告・理由"]
 
 
 def test_future_dated_data_is_excluded_from_ranking():
@@ -331,30 +456,21 @@ def test_scan_shape_preserves_missing_row_drop_count():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
-def test_scan_displays_missing_row_drop_count_without_changing_score():
+def test_scan_displays_historical_missing_row_warning_without_blocking_unverified_gap():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
-    shaped = scan._shape(frame)
-    universe = [("MISSING.T", "欠損確認社", "テスト")]
+    shaped = scan._shape(frame, symbol="7203.T")
+    universe = [("7203.T", "欠損確認社", "テスト")]
 
     ranked, excluded, _ = scan.run_scan(
         universe,
-        lambda symbols: {"MISSING.T": (shaped, None)},
+        lambda symbols: {"7203.T": (shaped, None)},
         lambda symbol: (shaped, None),
         run_at="missing-row-warning-test",
     )
-    baseline, _, _ = scan.run_scan(
-        universe,
-        lambda symbols: {"MISSING.T": (frame.dropna().copy(), None)},
-        lambda symbol: (frame.dropna().copy(), None),
-        run_at="missing-row-baseline-test",
-    )
-
     assert len(ranked) == 1 and excluded == []
     assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
-    assert ranked[0]["中期スコア"] == baseline[0]["中期スコア"]
-    assert ranked[0]["短期スコア"] == baseline[0]["短期スコア"]
-    assert ranked[0]["長期スコア"] == baseline[0]["長期スコア"]
+    assert "品質ゲートで分析保留" not in ranked[0]["警告・理由"]
 
 
 def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
@@ -362,11 +478,11 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
     _, clean, error = scan.analysis._split_raw_clean(frame)
     assert error is None
-    universe = [("FALLBACK.T", "個別取得確認社", "テスト")]
+    universe = [("7203.T", "個別取得確認社", "テスト")]
 
     ranked, excluded, _ = scan.run_scan(
         universe,
-        lambda symbols: {"FALLBACK.T": (pd.DataFrame(), "batch unavailable")},
+        lambda symbols: {"7203.T": (pd.DataFrame(), "batch unavailable")},
         lambda symbol: (clean, None),
         run_at="missing-row-fallback-test",
     )
