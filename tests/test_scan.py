@@ -185,7 +185,7 @@ def test_scanner_allows_missing_volume_column_as_unknown():
     assert shaped["Volume"].isna().all()
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
-    assert any("Volume" in item for item in warnings)
+    assert any("出来高列が欠落" in item for item in warnings)
 
 
 def test_scan_shape_retains_raw_and_price_bar_for_volume_only_missing_row():
@@ -483,7 +483,7 @@ def test_scan_shape_retains_ohlc_bar_when_only_volume_is_missing():
 
 def test_scan_shape_allows_missing_volume_column_as_unknown():
     frame = rising().drop(columns=["Volume"])
-    shaped = scan._shape(frame)
+    shaped = scan._shape(frame, symbol="7203.T")
     assert not shaped.empty
     assert shaped.index.equals(frame.index)
     assert shaped["Volume"].isna().all()
