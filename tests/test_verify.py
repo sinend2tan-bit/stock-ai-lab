@@ -140,7 +140,7 @@ def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_
     frame = make_frame(closes)
     missing_pos = 50
     frame.iloc[missing_pos, frame.columns.get_loc("Close")] = float("nan")
-    target_pos = 305  # compressed price-frame index 304 after one missing OHLC row
+    target_pos = 304  # Original-session evaluation cadence: raw positions 4, 9, ..., 304
     records, _ = verify.verify_symbol("7203.T", frame, run_at="x")
     target = next(
         r for r in records
@@ -153,6 +153,11 @@ def test_verification_restarts_indicators_after_interior_ohlc_gap_and_keeps_raw_
     )["長期"]
     assert target["スコア"] == direct["score"]
     assert target["測定日"] == str(frame.index[target_pos + verify.WINDOWS["長期"]].date())
+
+    # A missing bar must not shift the every-five-original-sessions evaluation cadence.
+    for record in records:
+        raw_pos = frame.index.get_loc(pd.Timestamp(record["評価日"]))
+        assert raw_pos % verify.EVAL_STEP == verify.EVAL_STEP - 1
 
 
 
