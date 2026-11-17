@@ -395,17 +395,16 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 if progress is not None:
                     progress(done, len(universe))
                 continue
-            # Remove the retained raw frame before indicator copies to avoid carrying
-            # a large diagnostic-only DataFrame through the analysis pipeline.
+            # Keep the original raw frame long enough to preserve historical
+            # OHLC NA rows as segment boundaries during indicator calculation.
+            indicator_source = raw.attrs.get("_quality_raw", raw)
+            # Remove diagnostic-only attributes from the shaped frame before
+            # indicator copies so the large raw frame is not propagated.
             for key in (
                 "_quality_raw", "_quality_report", "_quality_diagnostic_error",
                 "rows_dropped_by_dropna", "raw_row_count", "volume_only_missing_rows",
             ):
                 raw.attrs.pop(key, None)
-            # Use the original raw frame so historical OHLC NA rows remain
-            # visible as segment boundaries; the shaped frame has already
-            # excluded those rows for the ranking/quality display.
-            indicator_source = raw.attrs.get("_quality_raw", raw)
             df = _add_indicators_by_valid_ohlc_segments(indicator_source)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
