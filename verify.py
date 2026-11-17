@@ -280,11 +280,16 @@ def verify_all(symbols, fetcher, period_label=FETCH_PERIOD, run_at=None, progres
                  and e.get("理由", "").startswith("データ品質上の問題")),
                 None,
             )
+            try:
+                parsed_last = pd.to_datetime(raw.index[-1], errors="coerce")
+                last_date = "" if pd.isna(parsed_last) else str(parsed_last.date())
+            except Exception:
+                last_date = ""
             fetch_info.append({
                 "銘柄": symbol,
                 "取得": "品質保留" if quality_exclusion else "成功",
                 "本数": len(raw),
-                "データ最終日": str(raw.index[-1].date()),
+                "データ最終日": last_date,
                 "理由": quality_exclusion["理由"] if quality_exclusion else "",
             })
         if progress is not None:
