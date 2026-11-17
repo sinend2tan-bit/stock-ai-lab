@@ -36,9 +36,12 @@ def _exchange_holidays(calendar_name, start_year, end_year):
         # exact years explicitly; otherwise historical years can be outside
         # the default bounds and future years can be omitted silently.
         calendar = xcals.get_calendar(calendar_name, start=start, end=end)
+        # The calendar factory already trims non-session boundary dates
+        # (e.g. Jan 1) to first_session / last_session. sessions_in_range()
+        # requires session labels and would reject those original boundaries.
         sessions = {
             pd.Timestamp(session).date()
-            for session in calendar.sessions_in_range(start, end)
+            for session in calendar.sessions
         }
     except Exception as exc:
         # Keep missing years absent: callers will report gaps as unverified.
