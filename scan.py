@@ -311,9 +311,11 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
                 continue
             # Remove the retained raw frame before indicator copies to avoid carrying
             # a large diagnostic-only DataFrame through the analysis pipeline.
-            raw.attrs.pop("_quality_report", None)
-            raw.attrs.pop("_quality_diagnostic_error", None)
-            raw.attrs.pop("_quality_raw", None)
+            for key in (
+                "_quality_raw", "_quality_report", "_quality_diagnostic_error",
+                "rows_dropped_by_dropna", "raw_row_count",
+            ):
+                raw.attrs.pop(key, None)
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
