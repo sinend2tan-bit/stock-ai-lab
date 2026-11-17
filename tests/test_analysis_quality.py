@@ -113,12 +113,37 @@ def test_scoring_frame_keeps_price_bars_when_volume_is_missing():
         assert clean_scores[horizon]["label"] == raw_scores[horizon]["label"]
 
 
-def test_scoring_frame_omits_interior_ohlc_na_but_keeps_later_bars():
-    raw = frame()
-    raw.iloc[2, raw.columns.get_loc("Close")] = float("nan")
+def test_scoring_frame_restarts_on_contiguous_segment_after_interior_ohlc_gap():
+    idx = pd.bdate_range("2024-01-02", periods=320)
+    close = [100.0 + i * 0.08 + ((i % 9) - 4) * 0.13 for i in range(len(idx))]
+    raw = pd.DataFrame(
+        {
+            "Open": close,
+            "High": [value + 0.5 for value in close],
+            "Low": [value - 0.5 for value in close],
+            "Close": close,
+            "Volume": [1000.0] * len(idx),
+        },
+        index=idx,
+    )
+    missing_pos = 150
+    raw.iloc[missing_pos, raw.columns.get_loc("Close")] = float("nan")
+
     score_frame = analysis_quality.scoring_frame(raw)
-    assert len(score_frame) == len(raw) - 1
-    assert raw.index[-1] in score_frame.index
+    expected_segment = raw.iloc[missing_pos + 1 :].copy()
+    assert score_frame.index.equals(expected_segment.index)
+    assert score_frame.index[0] == idx[missing_pos + 1]
+
+    actual = analysis.add_indicators(score_frame)
+    expected = analysis.add_indicators(expected_segment)
+    for column in ["EMA5", "EMA20", "EMA50", "EMA200", "RSI14", "MACD", "Return_1d_pct"]:
+        pd.testing.assert_series_equal(actual[column], expected[column])
+
+
+def test_scoring_frame_is_empty_when_latest_ohlc_row_is_invalid():
+    raw = frame()
+    raw.iloc[-1, raw.columns.get_loc("Close")] = float("nan")
+    assert analysis_quality.scoring_frame(raw).empty
 
 def test_scoring_frame_empty_when_all_price_rows_are_invalid():
     raw = frame()
