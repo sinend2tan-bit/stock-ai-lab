@@ -193,8 +193,9 @@ def _data_quality_assessment(df, symbol):
     if report is None:
         try:
             market = analysis.market_of(symbol)
+            quality_raw = df.attrs.get("_quality_raw", df)
             report = data_quality.diagnose_history(
-                df,
+                quality_raw,
                 market=market,
                 holidays_by_year=analysis.MARKET_HOLIDAYS.get(market),
             )
@@ -295,6 +296,7 @@ def run_scan(universe, batch_fetcher, single_fetcher, run_at=None, progress=None
             # a large diagnostic-only DataFrame through the analysis pipeline.
             raw.attrs.pop("_quality_report", None)
             raw.attrs.pop("_quality_diagnostic_error", None)
+            raw.attrs.pop("_quality_raw", None)
             df = analysis.add_indicators(raw)
             results = analysis.assess_all(df)
             fresh = analysis.freshness_check(df, symbol)
