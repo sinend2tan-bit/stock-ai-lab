@@ -266,8 +266,17 @@ def verify_symbol(symbol, raw, period_label=FETCH_PERIOD, run_at=""):
                 missing_window[horizon] += 1
                 continue
 
-            prior_missing = [pos for pos in missing_ohlc_positions if pos < end]
-            segment_start = (prior_missing[-1] + 1) if prior_missing else 0
+            prior_missing_dates = [
+                missing_date for missing_date in missing_ohlc_dates
+                if missing_date < eval_date
+            ]
+            # Missing positions come from raw (uncompressed) rows, so never use
+            # them directly as iloc offsets into price_frame after invalid rows
+            # have been removed. Locate the first valid bar after the latest gap.
+            segment_start = (
+                int(price_frame.index.searchsorted(max(prior_missing_dates), side="right"))
+                if prior_missing_dates else 0
+            )
             segment = price_frame.iloc[segment_start:end]
             if len(segment) < MIN_BARS[horizon]:
                 warmup[horizon] += 1
