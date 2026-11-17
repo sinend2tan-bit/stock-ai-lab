@@ -185,7 +185,7 @@ def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
     assert shaped.attrs["_quality_report"].rows_with_missing == 1
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
-    assert any("欠損行の除外 1行" in item for item in warnings)
+    assert any("欠損行を検出 1行" in item for item in warnings)
 
 
 def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
@@ -259,7 +259,7 @@ def test_scan_quality_gate_synthetic_60_ticker_universe_exclusion_reasons():
     ranked_symbols = {row["コード"] for row in ranked}
     assert all(f"V{i:02d}.T" in ranked_symbols for i in range(4))
     assert all(
-        "欠損行の除外 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
+        "欠損行を検出 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
         for i in range(4)
     )
 
@@ -511,7 +511,7 @@ def test_scan_displays_historical_missing_row_warning_without_blocking_unverifie
         run_at="missing-row-warning-test",
     )
     assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert "欠損行を検出 1行" in ranked[0]["警告・理由"]
     assert "品質ゲートで分析保留" not in ranked[0]["警告・理由"]
 
 
@@ -530,7 +530,7 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     )
 
     assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert "欠損行を検出 1行" in ranked[0]["警告・理由"]
 
 
 
