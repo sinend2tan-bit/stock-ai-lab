@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import analysis
 import scan
 
 
@@ -176,16 +177,28 @@ def test_scan_diagnostic_failure_fails_closed(monkeypatch):
     assert "データ品質診断不能" in excluded[0]["警告・理由"]
 
 
-def test_scan_shape_retains_raw_for_quality_gate_and_drops_volume_only_row():
+def test_scanner_allows_missing_volume_column_as_unknown():
+    raw = rising().drop(columns=["Volume"])
+    shaped = scan._shape(raw, symbol="7203.T")
+    assert not shaped.empty
+    assert shaped.index.equals(raw.index)
+    assert shaped["Volume"].isna().all()
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert blocks == []
+    assert any("出来高列が欠落" in item for item in warnings)
+
+
+def test_scan_shape_retains_raw_and_price_bar_for_volume_only_missing_row():
     frame = rising()
     frame.iloc[-1, frame.columns.get_loc("Volume")] = float("nan")
     shaped = scan._shape(frame, symbol="7203.T")
-    assert len(shaped) == len(frame) - 1
+    assert len(shaped) == len(frame)
+    assert pd.isna(shaped["Volume"].iloc[-1])
     assert "_quality_report" in shaped.attrs
     assert shaped.attrs["_quality_report"].rows_with_missing == 1
     warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
     assert blocks == []
-    assert any("欠損行の除外 1行" in item for item in warnings)
+    assert any("Volumeのみ欠損で価格系列に保持 1行" in item for item in warnings)
 
 
 def test_scan_shape_blocks_price_missing_row_but_not_volume_only_row():
@@ -259,7 +272,7 @@ def test_scan_quality_gate_synthetic_60_ticker_universe_exclusion_reasons():
     ranked_symbols = {row["コード"] for row in ranked}
     assert all(f"V{i:02d}.T" in ranked_symbols for i in range(4))
     assert all(
-        "欠損行の除外 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
+        "欠損行を検出 1行" in next(row for row in ranked if row["コード"] == f"V{i:02d}.T")["警告・理由"]
         for i in range(4)
     )
 
@@ -459,6 +472,59 @@ def test_scan_shape_preserves_missing_row_drop_count():
     pd.testing.assert_frame_equal(frame, snapshot)
 
 
+def test_scan_shape_retains_ohlc_bar_when_only_volume_is_missing():
+    frame = rising()
+    frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
+
+    shaped = scan._shape(frame)
+
+    assert len(shaped) == len(frame)
+    assert pd.isna(shaped["Volume"].iloc[10])
+    assert shaped.attrs["rows_dropped_by_dropna"] == 0
+    assert shaped.attrs["volume_only_missing_rows"] == 1
+
+
+def test_scan_shape_allows_missing_volume_column_as_unknown():
+    frame = rising().drop(columns=["Volume"])
+    shaped = scan._shape(frame, symbol="7203.T")
+    assert not shaped.empty
+    assert shaped.index.equals(frame.index)
+    assert shaped["Volume"].isna().all()
+    warnings, blocks = scan._data_quality_assessment(shaped, "7203.T")
+    assert blocks == []
+    assert any("出来高列が欠落" in item for item in warnings)
+
+
+def test_scan_price_indicators_and_scores_are_unchanged_by_volume_only_missing():
+    baseline = rising()
+    with_missing_volume = baseline.copy(deep=True)
+    with_missing_volume.iloc[10, with_missing_volume.columns.get_loc("Volume")] = float("nan")
+
+    baseline_indicators = scan.analysis.add_indicators(baseline)
+    missing_indicators = scan.analysis.add_indicators(with_missing_volume)
+
+    price_columns = [
+        "EMA5", "EMA20", "EMA50", "EMA200", "RSI14",
+        "MACD", "MACD_Signal", "Return_1d_pct", "Volatility20_pct",
+    ]
+    pd.testing.assert_frame_equal(
+        baseline_indicators[price_columns],
+        missing_indicators[price_columns],
+    )
+    assert scan.analysis.assess_all(baseline_indicators) == scan.analysis.assess_all(missing_indicators)
+    assert pd.isna(missing_indicators["Volume_MA20"].iloc[10:30]).all()
+
+
+def test_scan_shape_recovers_volume_only_missing_rows_from_legacy_fallback():
+    frame = rising()
+    frame.iloc[10, frame.columns.get_loc("Volume")] = float("nan")
+    _raw, legacy_clean, error = scan.analysis._split_raw_clean(frame)
+    assert error is None
+    shaped = scan._scanner_price_frame(legacy_clean.attrs["_quality_raw"])
+    assert len(shaped) == len(frame)
+    assert pd.isna(shaped["Volume"].iloc[10])
+
+
 def test_scan_displays_historical_missing_row_warning_without_blocking_unverified_gap():
     frame = rising()
     frame.iloc[10, frame.columns.get_loc("Close")] = float("nan")
@@ -472,7 +538,7 @@ def test_scan_displays_historical_missing_row_warning_without_blocking_unverifie
         run_at="missing-row-warning-test",
     )
     assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert "欠損行を検出 1行" in ranked[0]["警告・理由"]
     assert "品質ゲートで分析保留" not in ranked[0]["警告・理由"]
 
 
@@ -491,7 +557,7 @@ def test_scan_displays_missing_row_drop_count_on_single_fetch_fallback():
     )
 
     assert len(ranked) == 1 and excluded == []
-    assert "欠損行の除外 1行" in ranked[0]["警告・理由"]
+    assert "欠損行を検出 1行" in ranked[0]["警告・理由"]
 
 
 
