@@ -313,9 +313,15 @@ with tab_overview:
             raw_hist, clean_hist, err = get_history_bundle(sym, period)
             indicator_input = analysis_quality.scoring_frame(raw_hist)
             if raw_hist is None or raw_hist.empty or indicator_input.empty:
+                if raw_hist is not None and raw_hist.empty and analysis.is_no_data_error(err):
+                    state = analysis.freshness_status_label("no_data")
+                elif raw_hist is not None and not raw_hist.empty:
+                    state = "品質保留"
+                else:
+                    state = "取得失敗"
                 rows.append({
                     "銘柄": sym, "会社名": company_name(sym),
-                    "状態": "品質保留" if raw_hist is not None and not raw_hist.empty else "取得失敗",
+                    "状態": state,
                     "終値": None, "データ最終日": None, "本数": 0,
                     "短期": "判定保留（データ品質）", "中期": "判定保留（データ品質）",
                     "長期": "判定保留（データ品質）",
