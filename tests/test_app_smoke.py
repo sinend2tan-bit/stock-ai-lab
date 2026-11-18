@@ -156,3 +156,63 @@ def test_journal_first_entry_no_future_warning():
         and "concatenation" in str(w.message)
     ]
     assert concat_warnings == []
+
+
+def _watchlist_frame(at):
+    for element in at.dataframe:
+        frame = element.value
+        if hasattr(frame, "columns") and {"銘柄", "状態"}.issubset(frame.columns):
+            return frame
+    raise AssertionError("watchlist dataframe was not rendered")
+
+
+def test_watchlist_shows_no_data_for_successful_empty_response(monkeypatch):
+    import pandas as pd
+    import streamlit as st
+    import analysis
+
+    def empty_response(_symbol, _period):
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            analysis.NO_DATA_ERROR_PREFIX + "テスト用の空レスポンス",
+        )
+
+    monkeypatch.setattr(analysis, "fetch_history_bundle", empty_response)
+    monkeypatch.setattr(analysis, "resolve_company_name", lambda _symbol, *_: "テスト銘柄")
+    st.cache_data.clear()
+
+    at = AppTest.from_file(APP_PATH)
+    at.session_state["symbols_text_日本株"] = "7203.T"
+    at.run(timeout=180)
+
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+    frame = _watchlist_frame(at)
+    assert len(frame) == 1
+    assert frame.iloc[0]["状態"] == "データなし"
+
+
+def test_watchlist_keeps_fetch_exception_separate_from_no_data(monkeypatch):
+    import pandas as pd
+    import streamlit as st
+    import analysis
+
+    def failed_fetch(_symbol, _period):
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            "データ取得でエラーが発生しました（TimeoutError: test）",
+        )
+
+    monkeypatch.setattr(analysis, "fetch_history_bundle", failed_fetch)
+    monkeypatch.setattr(analysis, "resolve_company_name", lambda _symbol, *_: "テスト銘柄")
+    st.cache_data.clear()
+
+    at = AppTest.from_file(APP_PATH)
+    at.session_state["symbols_text_日本株"] = "7203.T"
+    at.run(timeout=180)
+
+    assert not at.exception, f"app raised: {[e.value for e in at.exception]}"
+    frame = _watchlist_frame(at)
+    assert len(frame) == 1
+    assert frame.iloc[0]["状態"] == "取得失敗"
