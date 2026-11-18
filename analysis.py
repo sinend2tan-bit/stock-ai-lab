@@ -21,6 +21,13 @@ MARKET_TIMEZONES = {
 
 _MARKET_CALENDAR_ERRORS = {}
 
+NO_DATA_ERROR_PREFIX = "データが取得できませんでした。"
+
+
+def is_no_data_error(error):
+    """Return True only for a successful empty response, not a transport/provider exception."""
+    return isinstance(error, str) and error.startswith(NO_DATA_ERROR_PREFIX)
+
 
 def _exchange_holidays(calendar_name, start_year, end_year):
     """Build weekday closures from the pinned exchange_calendars session schedule.
@@ -288,7 +295,11 @@ def fetch_history_bundle(symbol, period="2y"):
     if last_error is not None:
         return pd.DataFrame(), pd.DataFrame(), last_error
     if df is None or df.empty:
-        return pd.DataFrame(), pd.DataFrame(), "データが取得できませんでした。銘柄コードの誤り、または提供側でデータがない可能性があります。"
+        return (
+            pd.DataFrame(),
+            pd.DataFrame(),
+            NO_DATA_ERROR_PREFIX + "銘柄コードの誤り、または提供側でデータがない可能性があります。",
+        )
     return _split_raw_clean(df, symbol=symbol)
 
 
