@@ -624,7 +624,7 @@ def freshness_status_label(status):
         "fresh": "取得成功",
         "check": "間隔確認",
         "stale": "鮮度注意",
-        "no_data": "取得失敗",
+        "no_data": "データなし",
     }.get(status, "鮮度不明")
 
 
