@@ -625,3 +625,20 @@ def test_bundle_duplicate_flat_ohlcv_columns_fail_closed(monkeypatch):
 
     assert raw.empty and clean.empty
     assert err is not None and "重複した価格列" in err
+
+
+@pytest.mark.parametrize(
+    ("freshness_status", "expected"),
+    [
+        ("fresh", "取得成功"),
+        ("check", "間隔確認"),
+        ("stale", "鮮度注意"),
+        ("no_data", "データなし"),
+        ("unexpected", "鮮度不明"),
+    ],
+)
+def test_freshness_status_label_is_explicit_and_fail_closed_for_unknown(
+    freshness_status, expected
+):
+    """表示状態は鮮度診断と一致し、未知の状態を成功扱いしない。"""
+    assert analysis.freshness_status_label(freshness_status) == expected
