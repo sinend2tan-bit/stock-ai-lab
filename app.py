@@ -1,3 +1,4 @@
+import hashlib
 import io
 import zipfile
 from datetime import datetime
@@ -20,13 +21,28 @@ st.title("Stock AI Lab | 株式分析・検証ツール")
 st.caption("日本株・米国株 / 短期・中期・長期の比較 / 自動発注なし")
 
 st.warning(
-    "試作版です。投資助言・利益予測ではありません。データは遅延・欠落・取得失敗の可能性があります。"
-    "日中のリアルタイム・デイトレード用途には使わず、まずは分析と仮想検証に使用してください。"
-    "表示するスコアはテクニカル条件の一致度であり、勝率や利益の確率ではありません。"
+    "試作版です。投資助言・利益予測ではありません。スコアはテクニカル条件の一致度であり、"
+    "勝率や利益の確率ではありません（詳しい注意は「使い方・注意」タブにあります）。"
 )
 
 DEFAULT_JP = "7203.T, 6758.T, 8306.T, 9984.T"
 DEFAULT_US = "AAPL, MSFT, NVDA, SPY"
+WATCHLIST_JP = "5401.T, 8766.T, 4689.T"
+PRESETS_JP = {
+    "標準": DEFAULT_JP,
+    "監視銘柄": WATCHLIST_JP,
+    "標準＋監視銘柄": DEFAULT_JP + ", " + WATCHLIST_JP,
+}
+
+
+def _apply_symbols_preset(preset_text, market):
+    """プリセットボタン用コールバック。銘柄コード欄の内容を置き換える。"""
+    st.session_state[f"symbols_text_{market}"] = preset_text
+
+
+# スキャン表の既定表示列（全列はチェックボックスで切り替える）
+SCAN_MAIN_COLUMNS = ["順位", "コード", "会社名", "中期スコア", "中期ラベル", "終値", "データ最終日"]
+SCAN_EXCLUDED_COLUMNS = ["コード", "会社名", "終値", "データ最終日", "警告・理由"]
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -51,14 +67,47 @@ def company_name(symbol):
         return name
     return analysis.resolve_company_name(symbol, fetch_company_name(symbol))
 
+def _apply_pending_detail_symbol():
+    """スキャン表で選んだ銘柄を、サイドバーの分析対象へ反映する。
+
+    ウィジェット生成後にその状態は変えられないため、選択は一度 pending
+    として積み、次の実行のサイドバー生成前にここで適用する。
+    スキャンは日本株専用なので、反映先は日本株の設定にする。
+    """
+    pending = st.session_state.pop("pending_detail_symbol", None)
+    if not pending:
+        return
+    text_key = "symbols_text_日本株"
+    current = st.session_state.get(text_key, DEFAULT_JP)
+    codes = [s.strip().upper() for s in current.split(",") if s.strip()]
+    if pending not in codes:
+        codes.append(pending)
+        st.session_state[text_key] = ", ".join(codes)
+    st.session_state["selected_symbol_日本株"] = pending
+
+
+_apply_pending_detail_symbol()
+
 with st.sidebar:
     st.header("設定")
     market = st.selectbox("市場", ["日本株", "米国株"])
     default_symbols = DEFAULT_JP if market == "日本株" else DEFAULT_US
+    if market == "日本株":
+        st.caption("銘柄プリセット（押すと銘柄コード欄が置き換わります）")
+        preset_cols = st.columns(len(PRESETS_JP))
+        for col, (label, preset_text) in zip(preset_cols, PRESETS_JP.items()):
+            col.button(
+                label, key=f"preset_sidebar_{label}",
+                on_click=_apply_symbols_preset, args=(preset_text, market),
+            )
+    symbols_key = f"symbols_text_{market}"
+    if symbols_key not in st.session_state:
+        # 初期値は Session State に入れておく（プリセットやスキャン連動で
+        # APIから値を差し替えるため、value= との併用警告を避ける）。
+        st.session_state[symbols_key] = default_symbols
     symbols_text = st.text_area(
         "銘柄コード（カンマ区切り）",
-        value=default_symbols,
-        key=f"symbols_text_{market}",
+        key=symbols_key,
         help="日本株は例：7203.T、米国株は例：AAPL。銘柄コードはご自身でも確認してください。",
     )
     sidebar_symbols = list(dict.fromkeys(
@@ -108,7 +157,10 @@ def fetch_verification_history(symbol):
 
 
 if refresh:
-    st.cache_data.clear()
+    # 更新で消すのは価格データのキャッシュだけに絞る
+    # （会社名の表示用キャッシュは再取得不要なので残す）。
+    get_history.clear()
+    get_history_bundle.clear()
 
 
 def show_freshness(df, symbol):
@@ -149,7 +201,7 @@ def show_data_quality(raw, symbol):
     異常とは断定しない。
     """
     st.markdown("**データ品質診断（取得直後データ）**")
-    st.caption(
+    quality_note = (
         "診断は売買シグナルではありません。価格データの自動補正は行いません。"
         "blocking理由がある場合や診断不能の場合は、スコア・ランキングを保留します。"
         "警告のみの場合はスコア式を変更しません。診断で問題がなくても、"
@@ -176,7 +228,7 @@ def show_data_quality(raw, symbol):
         st.error("品質上の問題があるため、このデータのスコア判定は保留します。")
         for reason in blocking_reasons:
             st.write(f"• {reason}")
-    st.write(
+    summary_line = (
         f"取得本数：{report['row_count']}本 / "
         f"欠損行（dropna除外候補）：{report['rows_dropped_by_dropna']}行 / "
         f"異常候補：{report['anomaly_count']}件 / "
@@ -184,23 +236,37 @@ def show_data_quality(raw, symbol):
         f"日付間隔の要確認：{report['review_count']}件 / "
         f"休場日カレンダー不足で判定不能：{report['unverified_gap_count']}件"
     )
-    if report["anomaly_count"] > 0:
-        st.warning(
-            f"異常候補が {report['anomaly_count']} 件あります。"
-            "詳細を確認し、このデータによる分析は慎重に扱ってください。"
-        )
-    elif (
-        report["warning_count"] > 0
-        or report["review_count"] > 0
-        or report["unverified_gap_count"] > 0
-    ):
-        st.info(
-            "異常候補はありませんが、警告候補・要確認・カレンダー不足による判定不能があります。"
-            "詳細を確認してください。"
-        )
-    else:
+    is_clean = (
+        not blocking_reasons
+        and report["anomaly_count"] == 0
+        and report["warning_count"] == 0
+        and report["review_count"] == 0
+        and report["unverified_gap_count"] == 0
+        and not report["missing_columns"]
+    )
+    if is_clean:
+        # 正常時は1行だけにし、説明と数値の内訳は折りたたみ側に寄せる。
         st.success("異常候補・警告候補・要確認はありませんでした。")
+    else:
+        st.write(summary_line)
+        if report["anomaly_count"] > 0:
+            st.warning(
+                f"異常候補が {report['anomaly_count']} 件あります。"
+                "詳細を確認し、このデータによる分析は慎重に扱ってください。"
+            )
+        elif (
+            report["warning_count"] > 0
+            or report["review_count"] > 0
+            or report["unverified_gap_count"] > 0
+        ):
+            st.info(
+                "異常候補はありませんが、警告候補・要確認・カレンダー不足による判定不能があります。"
+                "詳細を確認してください。"
+            )
     with st.expander("診断の詳細"):
+        st.caption(quality_note)
+        if is_clean:
+            st.write(summary_line)
         if report["missing_columns"]:
             st.write("• 必須列の欠落：" + "、".join(report["missing_columns"]))
         if report["nat_count"]:
@@ -295,13 +361,67 @@ def _format_gate_actual(actual):
     return actual
 
 
-tab_overview, tab_detail, tab_journal, tab_verify, tab_scan, tab_notes = st.tabs(
-    ["銘柄一覧", "個別分析", "仮想売買メモ", "検証", "スキャン", "使い方・注意"]
+def _scan_rows_from_csv(data_bytes):
+    """保存したスキャン結果CSV（scan.scan_to_csv の出力）を読み戻す。
+
+    形式が違う場合は None を返す（呼び出し側は記録を変更しない）。
+    復元した結果には取得時のデータフレームが残っていないため、
+    フォワード登録時の V2 計算は既存の再取得フォールバックで処理される。
+    """
+    try:
+        frame = pd.read_csv(io.BytesIO(data_bytes), encoding="utf-8-sig", dtype=str)
+    except Exception:
+        return None
+    if not set(scan.SCAN_COLUMNS).issubset(frame.columns):
+        return None
+    frame = frame.fillna("")
+    int_cols = {"順位", "中期スコア", "短期スコア", "長期スコア", "本数"}
+    ranked, excluded = [], []
+    for record in frame.to_dict("records"):
+        row = {}
+        for col in scan.SCAN_COLUMNS:
+            value = record[col]
+            if col in int_cols:
+                try:
+                    row[col] = int(float(value)) if value != "" else None
+                except (TypeError, ValueError):
+                    row[col] = None
+            elif col == "終値":
+                try:
+                    row[col] = float(value) if value != "" else None
+                except (TypeError, ValueError):
+                    row[col] = None
+            else:
+                row[col] = value
+        (ranked if row["区分"] == "ランキング" else excluded).append(row)
+    if not ranked and not excluded:
+        return None
+    run_at = ranked[0]["取得日時"] if ranked else excluded[0]["取得日時"]
+    meta = {
+        "実行日時": run_at,
+        "対象銘柄数": len(ranked) + len(excluded),
+        "ランキング件数": len(ranked),
+        "参考外件数": len(excluded),
+        "取得期間": "保存CSVから復元",
+    }
+    return ranked, excluded, meta
+
+
+tab_scan, tab_overview, tab_detail, tab_journal, tab_verify, tab_notes = st.tabs(
+    ["スキャン", "銘柄一覧", "個別分析", "仮想売買メモ", "検証", "使い方・注意"]
 )
 
 with tab_overview:
     st.subheader("ウォッチリスト")
     st.write("スコアはテクニカル条件の一致度であり、勝率や利益確率ではありません。条件がそろわない場合は中立または判定保留になります。")
+    if market == "日本株":
+        st.caption("銘柄プリセット（サイドバーの銘柄コード欄にも反映されます）")
+        preset_cols = st.columns(len(PRESETS_JP))
+        for col, (label, preset_text) in zip(preset_cols, PRESETS_JP.items()):
+            col.button(
+                label, key=f"preset_main_{label}",
+                on_click=_apply_symbols_preset, args=(preset_text, market),
+            )
     if not symbols:
         st.info("左側で銘柄コードを入力してください。")
     else:
@@ -371,7 +491,9 @@ with tab_overview:
         status.empty()
         progress.empty()
         table = pd.DataFrame(rows)
-        st.dataframe(table, width="stretch", hide_index=True)
+        show_all_watch = st.checkbox("一覧の全列を表示（本数を含む）", key="watchlist_show_all")
+        display_table = table if show_all_watch else table.drop(columns=["本数"])
+        st.dataframe(display_table, width="stretch", hide_index=True)
         st.download_button(
             "一覧をCSVで保存",
             data=table.to_csv(index=False).encode("utf-8-sig"),
@@ -492,6 +614,51 @@ with tab_journal:
         file_name="stock_paper_journal.csv",
         mime="text/csv",
     )
+    uploaded_journal = st.file_uploader(
+        "保存した仮想売買メモCSVを読み込む（復元・追加）",
+        type="csv", key="journal_csv_upload",
+    )
+    if uploaded_journal is not None:
+        journal_file_id = (
+            uploaded_journal.name,
+            uploaded_journal.size,
+            hashlib.md5(uploaded_journal.getvalue()).hexdigest(),
+        )
+        # 同じファイルが残ったままの再描画で二重に追加しないよう、
+        # 新しいファイルのときだけ取り込む。
+        if st.session_state.get("journal_upload_seen") != journal_file_id:
+            st.session_state.journal_upload_seen = journal_file_id
+            try:
+                loaded_journal = pd.read_csv(
+                    io.BytesIO(uploaded_journal.getvalue()),
+                    encoding="utf-8-sig", dtype=str,
+                )
+            except Exception:
+                loaded_journal = None
+            journal_columns = list(st.session_state.journal.columns)
+            if loaded_journal is None or not set(journal_columns).issubset(
+                loaded_journal.columns
+            ):
+                st.error(
+                    "このCSVは仮想売買メモの形式ではありませんでした。"
+                    "メモは変更していません。"
+                )
+            else:
+                loaded_journal = loaded_journal[journal_columns].fillna("")
+                for col in ["想定エントリー", "想定損切り", "想定利確", "終了価格"]:
+                    loaded_journal[col] = pd.to_numeric(
+                        loaded_journal[col], errors="coerce"
+                    ).fillna(0.0)
+                if st.session_state.journal.empty:
+                    st.session_state.journal = loaded_journal
+                else:
+                    st.session_state.journal = pd.concat(
+                        [st.session_state.journal, loaded_journal],
+                        ignore_index=True,
+                    )
+                st.success(
+                    f"仮想売買メモを {len(loaded_journal)} 件読み込みました。"
+                )
 
 with tab_verify:
     st.subheader("過去データでの検証")
@@ -669,10 +836,42 @@ with tab_scan:
     def get_batch(symbols_key, period):
         return scan.fetch_batch(list(symbols_key), period)
 
+    uploaded_scan = st.file_uploader(
+        "保存したスキャン結果CSVを読み込む（前回の結果をそのまま表示）",
+        type="csv", key="scan_csv_upload",
+    )
+    if uploaded_scan is not None:
+        scan_file_id = (
+            uploaded_scan.name,
+            uploaded_scan.size,
+            hashlib.md5(uploaded_scan.getvalue()).hexdigest(),
+        )
+        # 同じファイルが残ったままの再描画で、新しいスキャン結果を
+        # 古いCSVで上書きしないよう、新しいファイルのときだけ読み込む。
+        if st.session_state.get("scan_upload_seen") != scan_file_id:
+            st.session_state.scan_upload_seen = scan_file_id
+            restored = _scan_rows_from_csv(uploaded_scan.getvalue())
+            if restored:
+                restored_ranked, restored_excluded, restored_meta = restored
+                st.session_state.scan_ranked = restored_ranked
+                st.session_state.scan_excluded = restored_excluded
+                st.session_state.scan_meta = restored_meta
+                st.session_state.scan_frames = {}
+                st.success(
+                    "保存したスキャン結果を読み込みました"
+                    f"（実行日時：{restored_meta['実行日時']}）。"
+                )
+            else:
+                st.error(
+                    "このCSVはスキャン結果の形式ではありませんでした。"
+                    "結果は変更していません。"
+                )
+
     force_rescan = st.checkbox("キャッシュを使わず最新のデータで取り直す", key="scan_force")
     if st.button("スキャンを実行", type="primary"):
         if force_rescan:
-            st.cache_data.clear()
+            # 消すのはスキャンの一括取得キャッシュだけに絞る。
+            get_batch.clear()
         progress_bar = st.progress(0, text="データ取得と評価を行っています。")
         # V2 の計算には、スキャンが実際に使ったものと同一の株価データが必要なため、
         # 取得したデータをそのまま控えておく（V1 と V2 を同じデータで計算する）
@@ -712,14 +911,41 @@ with tab_scan:
     if st.session_state.scan_meta:
         meta = st.session_state.scan_meta
         st.caption(f"実行日時：{meta['実行日時']} / 取得期間：{meta['取得期間']}")
+        show_all_scan = st.checkbox("スキャン表の全列を表示", key="scan_show_all")
         ranked_df = pd.DataFrame(st.session_state.scan_ranked, columns=scan.SCAN_COLUMNS)
         ranked_df = ranked_df.astype(object).where(pd.notna(ranked_df), None)
-        st.dataframe(ranked_df, width="stretch", hide_index=True)
+        ranked_view = ranked_df if show_all_scan else ranked_df[SCAN_MAIN_COLUMNS]
+        st.dataframe(
+            ranked_view, width="stretch", hide_index=True,
+            on_select="rerun", selection_mode="single-row", key="scan_ranked_df",
+        )
+        selection = (st.session_state.get("scan_ranked_df") or {}).get("selection") or {}
+        selected_rows = selection.get("rows") or []
+        if selected_rows and selected_rows[0] < len(ranked_df):
+            chosen = ranked_df.iloc[selected_rows[0]]
+            st.markdown(
+                f"**選択中：{chosen['コード']} {chosen['会社名']}**"
+                "（行を選ぶと「個別分析」タブの対象に反映されます）"
+            )
+            if chosen.get("選定理由"):
+                st.write(f"選定理由：{chosen['選定理由']}")
+            if chosen.get("警告・理由"):
+                st.write(f"警告・理由：{chosen['警告・理由']}")
+            chosen_code = str(chosen["コード"])
+            if st.session_state.get("scan_detail_applied") != chosen_code:
+                st.session_state.scan_detail_applied = chosen_code
+                st.session_state.pending_detail_symbol = chosen_code
+                note = f"「個別分析」タブで {chosen_code} を表示します。"
+                if market != "日本株":
+                    note += "（反映先は日本株の設定です。市場を日本株に切り替えてください）"
+                st.info(note)
+                st.rerun()
         if st.session_state.scan_excluded:
             st.markdown("**参考外（ランキングには入れていません）**")
             excluded_df = pd.DataFrame(st.session_state.scan_excluded, columns=scan.SCAN_COLUMNS)
             excluded_df = excluded_df.astype(object).where(pd.notna(excluded_df), None)
-            st.dataframe(excluded_df, width="stretch", hide_index=True)
+            excluded_view = excluded_df if show_all_scan else excluded_df[SCAN_EXCLUDED_COLUMNS]
+            st.dataframe(excluded_view, width="stretch", hide_index=True)
         st.download_button(
             "スキャン結果をCSVで保存",
             data=scan.scan_to_csv(st.session_state.scan_ranked, st.session_state.scan_excluded),
@@ -727,7 +953,7 @@ with tab_scan:
             mime="text/csv",
         )
     else:
-        st.info("まだスキャン結果がありません。「スキャンを実行」を押してください。結果はこの画面を開いている間だけ保持されるため、必要ならCSVで保存してください。")
+        st.info("まだスキャン結果がありません。「スキャンを実行」を押してください。結果はこの画面を開いている間だけ保持されるため、必要ならCSVで保存してください。保存したCSVがあれば、上の読み込み口から前回の結果をそのまま表示できます。")
 
     st.divider()
     st.subheader("フォワード登録と事後評価")
@@ -1313,6 +1539,12 @@ with tab_scan:
 with tab_notes:
     st.subheader("使い方")
     st.markdown("""
+### 注意（必ずお読みください）
+試作版です。投資助言・利益予測ではありません。データは遅延・欠落・取得失敗の可能性があります。
+日中のリアルタイム・デイトレード用途には使わず、まずは分析と仮想検証に使用してください。
+表示するスコアはテクニカル条件の一致度であり、勝率や利益の確率ではありません。
+""")
+    st.markdown("""
 1. 左側で市場を選び、銘柄コードを入力します。
 2. 「銘柄一覧」で候補を比較します。
 3. 「個別分析」でチャートと短期・中期・長期の条件を確認します。
@@ -1335,7 +1567,7 @@ with tab_notes:
 - データの新旧は暦日による暫定チェックで、公式の営業日カレンダーとは照合していません。古い可能性がある場合は警告を表示します。
 - 短期スコアは日足のテクニカル条件に基づきます。リアルタイムのデイトレード用シグナルではありません。
 - 自動発注、証券口座への接続、売買注文機能はありません。
-- 仮想売買メモは永続保存されません。CSVを定期的にダウンロードして保管してください。
+- 仮想売買メモは永続保存されません。CSVを定期的にダウンロードして保管してください。保存したCSVは、仮想売買メモ画面の読み込み口から復元できます。
 - フォワード登録・評価もCSVで保存・復元します。登録や評価の後は、未保存の警告が出ている間にCSVを保存してください。下の「全データのバックアップ」で、検証・メモ・フォワードのCSVを1つのZIPにまとめて保存できます。
 - スキャンのフォワード登録では、現行仕様（V1）に加えて新仕様（V2）も並行して記録し、「スキャン」タブの「V1・V2比較」で比べられます。V2は値動きの大きさで条件をならし、弱い銘柄は「下落注意」として方向判定から外す仕様です。V2は評価中のため、画面の表示や順位づけはV1のままです。十分なフォワード検証が終わるまで、自動で切り替えることはありません。V2で計算できなかった銘柄は記録を作らず、「V2未登録の理由」として理由を残します。
 """)
